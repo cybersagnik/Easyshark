@@ -1,0 +1,64 @@
+{
+  "signatures": [
+    {
+      "name": "malware_cobalt_strike",
+      "pattern": "MSSE",
+      "severity": "CRITICAL",
+      "description": "Cobalt Strike beacon signature"
+    },
+    {
+      "name": "malware_emotet",
+      "pattern": "Emotet",
+      "severity": "CRITICAL",
+      "description": "Emotet malware signature"
+    },
+    {
+      "name": "exploit_ms17_010",
+      "pattern": "\\PIPE\\browser",
+      "severity": "CRITICAL",
+      "description": "MS17-010 EternalBlue exploit"
+    },
+    {
+      "name": "exploit_eternalblue",
+      "pattern": "SMBr",
+      "severity": "CRITICAL",
+      "description": "EternalBlue SMB exploit"
+    },
+    {
+      "name": "shellcode_metasploit",
+      "pattern": "\\x90\\x90\\x90\\x90",
+      "severity": "HIGH",
+      "description": "NOP sled shellcode"
+    },
+    {
+      "name": "c2_callback",
+      "pattern": "Mozilla/4.0 (compatible; MSIE 6.0;",
+      "severity": "HIGH",
+      "description": "Suspicious user agent"
+    },
+    {
+      "name": "sql_injection",
+      "pattern": "UNION SELECT",
+      "severity": "HIGH",
+      "description": "SQL injection attempt"
+    },
+    {
+      "name": "xss_attack",
+      "pattern": "<script>alert(",
+      "severity": "MEDIUM",
+      "description": "XSS attack pattern"
+    },
+    {
+      "name": "directory_traversal",
+      "pattern": "../",
+      "severity": "MEDIUM",
+      "description": "Directory traversal attempt"
+    },
+    {
+      "name": "cmd_injection",
+      "pattern": "|cmd.exe",
+      "severity": "HIGH",
+      "description": "Command injection attempt"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+1. What SMTP username was used to send mail in this capture?
+sneakyg33k@aol.com
+
+2. What SMTP password was used?
+558r00lz
+
+3. What was the recipient of the email that contained the docx attachment?
+sec558@gmail.com
+
+4. What file was attached to the email?
+secretrendezvous.docx
+
+5. What is the MD5 of the attached docx file?
+9e423e11db88f01bbff81172839e1923
+
+6. What is the MD5 of the image embedded inside the attached docx?
+aadeace50997b1ba24b09ac2ef1940b7
+
+7. What does the attached docx say about a rendezvous?
+Meet me at the fountain near the rendezvous point
+
+8. What is the source IP that submitted the SMTP message?
+192.168.1.159

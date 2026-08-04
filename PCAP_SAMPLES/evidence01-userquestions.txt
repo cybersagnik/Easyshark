@@ -1,0 +1,6 @@
+1. Is there any IM communication (label packets)?
+2. What was the first comment in the captured IM conversation?
+3. What is the name of the file transferred in IM conversation?
+4. What is the magic number of the file you want to extract (first four bytes)?
+5. What was the MD5sum of the file?
+6. What is the secret recipe transferred?

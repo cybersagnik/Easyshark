@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.env.local
+*.log
+response-*.txt
+/tmp_opencode/
+project_shift.md
+context.md
+.easyshark/
+tmp/coverage_report.md
+tmp/*.jsonl

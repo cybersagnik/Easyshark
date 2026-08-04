@@ -1,0 +1,8 @@
+1. What SMTP username was used to send mail in this capture?
+2. What SMTP password was used?
+3. What was the recipient of the email that contained the docx attachment?
+4. What file was attached to the email?
+5. What is the MD5 of the attached docx file?
+6. What is the MD5 of the image embedded inside the attached docx?
+7. What does the attached docx say about a rendezvous?
+8. What is the source IP that submitted the SMTP message?

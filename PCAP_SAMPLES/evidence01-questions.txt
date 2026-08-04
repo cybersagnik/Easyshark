@@ -1,0 +1,8 @@
+1. What AIM screen name sent the file in this capture?
+2. What file was transferred over AIM in this capture?
+3. What is the MD5 of the file transferred over AIM?
+4. What is the recipe described in the transferred document?
+5. What web advertising network was contacted by this user?
+6. What was the chat message accompanying the file transfer?
+7. How many TCP packets were sent to the AIM chat server (port 443) by 192.168.1.158?
+8. What is the destination IP that received the file transfer on port 5190?

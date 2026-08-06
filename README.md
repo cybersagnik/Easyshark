@@ -1,4 +1,4 @@
-# EasyShark v1.0.0
+# EasyShark v1.0.0 (Beta Version)
 
 <p align="center" style="color: #00d4ff; font-weight: bold; line-height: 1.05;">
 <pre style="color: #00d4ff; font-weight: bold;">
@@ -154,7 +154,7 @@ pcap > investigate What happened in this capture? --auto
 
 - **Hallucinated answers** — the LLM can sometimes invent evidence. The claim-grounding pass and hallucination detector flag these, but they are not foolproof.
 - **Tool-loop failures** — free-tier models can timeout or return malformed responses. The tool loop retries once then falls back to a dissection-aware summary.
-- **Unlabelled PCAPs** — heuristic coverage on novel captures is unmeasured. Questions outside the ~14 supported intent families may yield "Insufficient data".
+- **Late Response** - Free models do give a late response, making the tool slower.
 
 ---
 

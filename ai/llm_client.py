@@ -27,7 +27,7 @@ import os
 import re
 import ssl
 import time
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 try:
     import urllib.request as _urlreq
@@ -233,6 +233,154 @@ class _OllamaCompatResponse:
         self.usage = payload.get("usage") or {}
 
 
+def _safe_execute_tool(name: str, args: Dict[str, Any], context) -> Dict[str, Any]:
+    """Execute one forensic tool, never raising. Used by the parallel
+    executor in query_with_tools (architecture fix, 2026-08-06)."""
+    from ai.tool_registry import execute_tool
+    try:
+        return execute_tool(name, args, context)
+    except Exception as exc:
+        return {"error": f"tool {name} raised: {exc}"}
+
+
+_TOOL_PLAN_JSON_RE = re.compile(r'\{\s*"tool"\s*:')
+
+
+def _looks_like_tool_plan(text: Optional[str]) -> bool:
+    """True when ``text`` is a tool call written out as plain text instead
+    of a real answer — e.g. ``{"tool": "extract_files", "args": {...}}``.
+
+    Free-tier backends (Zen deepseek-v4-flash-free) that cannot execute
+    structured function calls respond to a tools-advertising prompt by
+    printing their intended calls as literal JSON. Such text is NOT an
+    answer: no layer should surface it, and the loop should nudge the
+    model to use the real tool protocol (or fall through to a path that
+    answers purely from the evidence).
+    """
+    if not text:
+        return False
+    return bool(_TOOL_PLAN_JSON_RE.search(text))
+
+
+def _shorten_args(args: Dict[str, Any], limit: int = 60) -> str:
+    """Compact tool args for a one-line status display (never logged raw)."""
+    if not args:
+        return ""
+    try:
+        s = json.dumps(args, default=str, ensure_ascii=False)
+    except Exception:
+        s = str(args)
+    if len(s) > limit:
+        return s[: limit - 3] + "..."
+    return s
+
+
+# Phase 19 — docx-text nudge. Fires at most once per loop so the model is
+# not re-prompted every step while it works through the docx reading.
+_DOCX_READ_NUDGED: List[bool] = []
+_DOCX_CONTENT_RE = re.compile(
+    r"\b(docx|document|word/document\.xml|file content|what does .* say|"
+    r"quote|text of|read the file|recipe|rendezvous)\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_docx_content(question: str) -> bool:
+    return bool(_DOCX_CONTENT_RE.search(question or ""))
+
+
+def _extract_files_returned_docx_without_text(result: Dict[str, Any]) -> bool:
+    """True when a tool result is an extract_files payload whose files are
+    .docx blobs carrying no text_preview (so the parsed document text is
+    NOT available to the model from that tool)."""
+    if not isinstance(result, dict):
+        return False
+    files = result.get("files")
+    if not isinstance(files, list) or not files:
+        return False
+    for f in files:
+        fmt = (f.get("format") or "").upper()
+        if "DOCX" in fmt or "ZIP" in fmt:
+            if not f.get("text_preview"):
+                return True
+    return False
+
+
+def _docx_reassembly_hint(context) -> str:
+    """Deterministic hint for reading a fragmented .docx via the python_eval
+    sandbox. Finds the flow carrying the most PK\x03\x04 zip magic bytes,
+    and returns a ready-to-paste code skeleton the model can hand to
+    python_eval verbatim. Empty string when no such blob is present (e.g.
+    the capture has no fragmented zip)."""
+    packets = list(getattr(context, "packets", None) or [])
+    if not packets:
+        return ""
+    # Group by (src_ip, src_port, dst_ip, dst_port) — the flow the docx
+    # ride on. Count zip-magic bytes per flow and total payload bytes so
+    # we pick the transfer that actually carries the document.
+    flow_stats: Dict[Tuple[Any, Any, Any, Any], Tuple[int, int]] = {}
+    for p in packets:
+        pl = getattr(p, "payload", b"") or b""
+        if not pl:
+            continue
+        key = (getattr(p, "src_ip", None), getattr(p, "src_port", None),
+               getattr(p, "dst_ip", None), getattr(p, "dst_port", None))
+        magic = pl.count(b"PK\x03\x04")
+        if not magic:
+            continue
+        cur_m, cur_tot = flow_stats.get(key, (0, 0))
+        flow_stats[key] = (cur_m + magic, cur_tot + len(pl))
+    if not flow_stats:
+        return ""
+    # Both the HTTPS download and the AIM transfer carry the same docx on
+    # evidence01; prefer the chat transfer (AIM/OSCAR uses 5190+) when the
+    # question is about a file transfer, so the hint matches the file's
+    # actual delivery path rather than the download it came from.
+    _CHAT_PORTS = {5190, 5191, 5192, 5193, 5194, 5195, 1863, 6667}
+
+    def _rank(item):
+        (ip_a, port_a, ip_b, port_b), (magic, total) = item
+        is_chat = (port_a in _CHAT_PORTS or port_b in _CHAT_PORTS)
+        return (is_chat, magic, total)
+
+    best = max(flow_stats.items(), key=_rank)
+    (src_ip, src_port, dst_ip, dst_port), (magic_count, total) = best
+    if magic_count < 2 or total < 1000:
+        return ""
+    idxs = sorted(getattr(p, "index", 0)
+                  for p in packets
+                  if (getattr(p, "src_ip", None) == src_ip
+                      and getattr(p, "src_port", None) == src_port
+                      and getattr(p, "dst_ip", None) == dst_ip
+                      and getattr(p, "dst_port", None) == dst_port))
+    lo, hi = (idxs[0], idxs[-1]) if idxs else (0, 0)
+    a = f"getattr(p, 'src_ip', None) == {src_ip!r} and getattr(p, 'src_port', None) == {src_port}"
+    b = f"getattr(p, 'dst_ip', None) == {dst_ip!r} and getattr(p, 'dst_port', None) == {dst_port}"
+    skeleton = (
+        "import zipfile, io, re\n"
+        "pkts = sorted([p for p in packets\n"
+        f"               if ({a}) and ({b})],\n"
+        "              key=lambda p: getattr(p, 'index', 0))\n"
+        "data = b''.join((getattr(p, 'payload', b'') or b'') for p in pkts)\n"
+        "start = data.find(b'PK\\x03\\x04')\n"
+        "blob = data[start:] if start >= 0 else data\n"
+        "end = blob.rfind(b'PK\\x05\\x06')\n"
+        "if end >= 0:\n"
+        "    blob = blob[:end + 22]\n"
+        "zf = zipfile.ZipFile(io.BytesIO(blob))\n"
+        "xml = zf.read('word/document.xml').decode('utf-8', 'replace')\n"
+        "text = re.sub(r'<[^>]+>', '', xml)\n"
+        "result = f'{len(blob)} bytes: {text!r}'\n"
+    )
+    return (
+        f"The fragmented .docx rides on flow {src_ip}:{src_port} -> "
+        f"{dst_ip}:{dst_port} (packets {lo}-{hi}, {magic_count} zip chunks, "
+        f"{total} payload bytes). This exact python_eval snippet reassembles "
+        f"and unzips it:\n\n{skeleton}\n\n"
+        f"Run that snippet now and quote the text from its result."
+    )
+
+
 # ===========================================================================
 # LLMClient
 # ===========================================================================
@@ -282,6 +430,9 @@ class LLMClient:
         self._minute_window_start = time.monotonic()
         self._openrouter_soft_cap_warned = False
         self._openrouter_hard_capped = False
+        # Architecture fix — persistent keep-alive session so serial
+        # tool-loop round-trips reuse the same TCP/TLS connection.
+        self._openrouter_session = None
 
         # OpenCode Zen cloud — PRIMARY transport (replaces OpenRouter).
         # Same OpenAI-compatible wire protocol; the only difference is a
@@ -353,6 +504,32 @@ class LLMClient:
         self.default_max_tokens = GROQ_MAX_TOKENS
         self.timeout = GROQ_TIMEOUT
         self._active_backend = "ollama"
+
+        # Optional UI status sink (cli/status.py). Set by the shell so the
+        # analyst sees provider / tool-loop / stream progress while a
+        # long-running command is blocked on the network. Never raises.
+        self._status_cb: Optional[Callable[[str, str], None]] = None
+
+    # ------------------------------------------------------------------ #
+    # UI status events                                                    #
+    # ------------------------------------------------------------------ #
+    def set_status_callback(self, cb: Optional[Callable[[str, str], None]]) -> None:
+        """Register a ``(stage, detail)`` callback for live progress.
+
+        Called defensively from provider routing, the tool loop and the
+        streaming path. The callback must be fast and must not raise;
+        any exception it raises is swallowed.
+        """
+        self._status_cb = cb
+
+    def _emit_status(self, stage: str, detail: str = "") -> None:
+        cb = self._status_cb
+        if cb is None:
+            return
+        try:
+            cb(stage, detail)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Backend introspection                                              #
@@ -430,6 +607,29 @@ class LLMClient:
     # ------------------------------------------------------------------ #
     # OpenRouter transport (cloud, PRIMARY)                              #
     # ------------------------------------------------------------------ #
+    def _openrouter_http_session(self):
+        """Persistent keep-alive session for OpenRouter calls.
+
+        Architecture fix (2026-08-06): the previous transport opened a
+        fresh urllib connection per call, so every tool-loop round-trip
+        paid a full TCP/TLS handshake. requests.Session pools connections
+        and keeps them alive across calls. Returns None when requests is
+        unavailable, in which case the urllib transport is used.
+        """
+        if getattr(self, "_openrouter_session", None) is None:
+            try:
+                import requests
+                session = requests.Session()
+                session.headers.update({
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                })
+                self._openrouter_session = session
+            except Exception as exc:
+                logger.debug("requests unavailable for OpenRouter: %s", exc)
+                self._openrouter_session = False
+        return self._openrouter_session or None
+
     def _openrouter_reachable(self) -> bool:
         if getattr(self, "_openrouter_hard_capped", False):
             return False
@@ -476,6 +676,11 @@ class LLMClient:
         treated as "this backend is out of the rotation" for a 60s cooldown
         via the reachability probe cache; a 429 additionally exhausts the
         (role, provider) pair so only this role loses OpenRouter (Phase 16).
+
+        Architecture fix (2026-08-06): sends over a persistent keep-alive
+        requests.Session when available (reuses the connection across
+        tool-loop round-trips); falls back to a fresh urllib connection
+        otherwise.
         """
         if not self._openrouter_enter():
             return None
@@ -496,6 +701,33 @@ class LLMClient:
             "Authorization": f"Bearer {self.openrouter_api_key}",
         }
         data = json.dumps(body).encode("utf-8")
+
+        session = self._openrouter_http_session()
+        if session is not None:
+            try:
+                resp = session.post(
+                    url, json=body, timeout=getattr(
+                        self, "openrouter_timeout", OPENROUTER_TIMEOUT))
+                if resp.status_code != 200:
+                    detail = resp.text[:300]
+                    logger.warning("OpenRouter HTTP %s — %s",
+                                   resp.status_code, detail)
+                    if resp.status_code == 429:
+                        self._mark_exhausted("openrouter", model_type)
+                    elif resp.status_code in (401, 402, 403):
+                        self._openrouter_reachable_cache = False
+                    return None
+                try:
+                    payload = resp.json()
+                except Exception as exc:
+                    logger.error("OpenRouter returned non-JSON: %s", exc)
+                    return None
+                return _OllamaCompatResponse(payload)
+            except Exception as exc:
+                logger.warning("OpenRouter requests.Session failed: %s", exc)
+                # Fall through to the urllib transport below.
+
+        # Legacy urllib transport (fresh connection per call) — fallback.
         try:
             req = _urlreq.Request(url, data=data, headers=headers, method="POST")
             with _urlreq.urlopen(req, timeout=getattr(
@@ -1198,6 +1430,7 @@ class LLMClient:
             stream_fn = (self._stream_zen_sse if backend == "zen"
                          else self._stream_openrouter_sse)
             produced = False
+            self._emit_status("streaming", f"{model_type} · {backend}")
             for delta in stream_fn(
                     messages=messages, model_type=model_type,
                     temperature=effective_temp, max_tokens=max_tokens):
@@ -1211,6 +1444,7 @@ class LLMClient:
                             rcc[model_type].get(backend, 0) + 1)
                     yield delta
             if produced:
+                self._emit_status("streaming", f"{model_type} done")
                 return
 
         # 2) Non-streaming last resort (route via _call_messages so the
@@ -1282,6 +1516,10 @@ class LLMClient:
             call = getattr(self, f"_{backend}_call_messages", None)
             if call is None:
                 continue
+            self._emit_status(
+                "llm",
+                f"{model_type} · {backend} {model or ''}",
+            )
             response = call(
                 messages=messages, model_type=model_type,
                 temperature=temperature, max_tokens=max_tokens,
@@ -1297,6 +1535,10 @@ class LLMClient:
             # Record a fallback only when a lower-priority provider remains.
             if idx < len(chain) - 1:
                 self.fallback_count += 1
+                self._emit_status(
+                    "llm",
+                    f"{model_type} · {backend} failed → trying next backend",
+                )
         logger.error("No LLM backend available (model_type=%s)", model_type)
         return None
 
@@ -1431,7 +1673,8 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
                          max_tokens: int = 2048,
                          temperature: Optional[float] = None,
                          return_transcript: bool = False,
-                         system_prompt: Optional[str] = None) -> Optional[Any]:
+                         system_prompt: Optional[str] = None,
+                         evidence_seeded: bool = False) -> Optional[Any]:
         """Multi-turn tool-calling loop.
 
         Args:
@@ -1445,6 +1688,11 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
                 Used by the Phase 9 executor so it emits the JSON verdict
                 schema instead of the generic "Answer: ..." explainer
                 format. Defaults to the role's stock prompt.
+            evidence_seeded: True when the caller already injected the
+                deterministic evidence bundle into the question. The loop
+                then accepts a direct text-only answer (no forced tool
+                call), which is how the explainer answers in one round
+                after the single-shot path.
         """
         if temperature is None:
             temperature = self._default_temperature(model_type)
@@ -1456,11 +1704,13 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         tools_called = 0
         seen_calls: set = set()
         # Lazy import to avoid circular dependency with ai.tool_registry.
-        from ai.tool_registry import TOOL_SCHEMAS, execute_tool
+        from ai.tool_registry import TOOL_SCHEMAS
         from ai.tool_registry import filter_tool_schemas
 
         # Phase 15 — only advertise tools for protocols present in the
         # capture (reduces prompt tokens, stops evidence invention).
+        # Phase 19 — recompute per step so tools created at runtime via
+        # create_tool (L4) become callable in the next loop iteration.
         tools = TOOL_SCHEMAS
         try:
             tools = filter_tool_schemas(getattr(context, "triage", None),
@@ -1468,12 +1718,31 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         except Exception:
             tools = TOOL_SCHEMAS
 
+        # Names we already nudged to create_tool once (avoid infinite loops).
+        nudged_to_create: set = set()
+        seen_unknown: set = set()
+
         for step in range(max_steps):
+            # Tool rounds emit small outputs (a tool call + brief
+            # reasoning). Clamp after the first round so the provider is
+            # not free to generate 2k tokens before we receive the call.
+            round_max = max_tokens if step == 0 else min(max_tokens, 1024)
+            # Refresh tool schemas every step so runtime-created tools
+            # (create_tool / register_tool) are visible to the model.
+            try:
+                tools = filter_tool_schemas(getattr(context, "triage", None),
+                                            getattr(context, "dissection", None))
+            except Exception:
+                tools = TOOL_SCHEMAS
+            self._emit_status(
+                "tool-loop",
+                f"step {step + 1}/{max_steps} · asking model ({model_type})",
+            )
             response = self._call_messages(
                 messages=messages,
                 model_type=model_type,
                 temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=round_max,
                 tools=tools,
                 tool_choice="auto",
             )
@@ -1526,12 +1795,35 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
             if not tool_calls:
                 content = (getattr(msg, "content", "") or "").strip()
                 content = self._strip_think(content) if content else None
+                # Architecture fix (2026-08-06) — free-tier models print
+                # their intended tool calls as literal JSON text
+                # ({"tool": ..., "args": ...}) instead of invoking the
+                # function protocol. That is NOT an answer: nudge the
+                # model to actually call the function.
+                if _looks_like_tool_plan(content) and step < max_steps - 1:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You wrote a tool call as plain text ({\"tool\": "
+                            "...}). Do NOT write tool calls out. Call the "
+                            "function through the provided tool protocol so "
+                            "it is executed, then answer from its result."
+                        ),
+                    })
+                    continue
+                # Architecture fix — a tool-plan written at the LAST step
+                # can't be nudged; it is not an answer. Return None so the
+                # caller's retry / fallback path handles it.
+                if _looks_like_tool_plan(content):
+                    return (None, transcript) if return_transcript else None
                 # Phase 15 hardening: the model must ground itself in at
                 # least one tool call before we accept a text-only answer.
                 # Otherwise it can answer with a "plan" or claim no tool
                 # results are available (seen on evidence01). Nudge it to
-                # actually call a tool and continue the loop.
-                if tools_called == 0 and step < max_steps - 1:
+                # actually call a tool and continue the loop. When the
+                # deterministic evidence bundle was already seeded
+                # (evidence_seeded), a direct answer is legitimate.
+                if not evidence_seeded and tools_called == 0 and step < max_steps - 1:
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1543,11 +1835,28 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
                         ),
                     })
                     continue
+                # Architecture fix (2026-08-06) — an empty assistant message
+                # (no content, no tool calls) mid-loop must not end the
+                # investigation with None. The model already gathered
+                # evidence; force synthesis from it.
+                if content is None and tools_called > 0 and step < max_steps - 1:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You returned an empty message. Use the tool "
+                            "results already present in this conversation to "
+                            "answer the question now. Reply "
+                            "'Answer: <value> (source: <tool>)' with the "
+                            "evidence you actually saw."
+                        ),
+                    })
+                    continue
                 if return_transcript:
                     return content, transcript
                 return content
 
             any_dup = False
+            prepared = []
             for tc in tool_calls:
                 name = tc.function.name
                 raw_args = tc.function.arguments or ""
@@ -1560,10 +1869,59 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
                 if this_call_dup:
                     any_dup = True
                 seen_calls.add(sig)
-                try:
-                    result = execute_tool(name, args, context)
-                except Exception as exc:
-                    result = {"error": f"tool {name} raised: {exc}"}
+                prepared.append((tc, name, args))
+
+            # Architecture fix — parallel tool execution. The 11 forensic
+            # tools are deterministic, local and read-only over
+            # packets/flows; running the tool calls from one assistant
+            # message concurrently collapses their wall-clock cost.
+            # Order is preserved; a serialized fallback keeps behaviour
+            # identical if threading is unavailable.
+            #
+            # python_eval is excluded from the pool and run on the main
+            # thread: its 5s timeout uses signal.setitimer(SIGALRM), which
+            # only fires on the main thread. In a worker thread a busy
+            # loop would hang the loop forever instead of timing out.
+            # Runtime-created tools wrap the same sandbox, so they are
+            # main-thread too (is_sandboxed_tool covers both).
+            from ai.tool_registry import is_sandboxed_tool
+            poolable = [(i, tc, name, args)
+                        for i, (tc, name, args) in enumerate(prepared)
+                        if not is_sandboxed_tool(name)]
+            main_tasks = [(i, tc, name, args)
+                          for i, (tc, name, args) in enumerate(prepared)
+                          if is_sandboxed_tool(name)]
+            results: List[Optional[Dict[str, Any]]] = [None] * len(prepared)
+            try:
+                from concurrent.futures import ThreadPoolExecutor
+                if poolable:
+                    with ThreadPoolExecutor(max_workers=min(4, len(poolable))) as ex:
+                        futures = [
+                            ex.submit(_safe_execute_tool, name, args, context)
+                            for _i, _tc, name, args in poolable
+                        ]
+                        for (i, _tc, _n, _a), fut in zip(poolable, futures):
+                            results[i] = fut.result()
+            except Exception:
+                for i, _tc, name, args in poolable:
+                    results[i] = _safe_execute_tool(name, args, context)
+            for i, _tc, name, args in main_tasks:
+                results[i] = _safe_execute_tool(name, args, context)
+            # Phase 19 — a tool the model invented but never created yields
+            # "unknown tool: <name>". Nudge it to define that tool via
+            # create_tool (which is advertised when python_eval is enabled)
+            # before continuing the loop.
+            from ai.tool_registry import PYTHON_EVAL_ENABLED as _EVAL_ON
+            unknown_names = []
+            for (tc, name, args), result in zip(prepared, results):
+                err = result.get("error", "") if isinstance(result, dict) else ""
+                if isinstance(err, str) and err.startswith("unknown tool:"):
+                    unknown_names.append(name)
+            # Append tool messages FIRST — an assistant message with
+            # tool_calls must be followed by a tool message per tool_call_id
+            # before any new user message (API contract; nudges below break it
+            # otherwise, e.g. Zen HTTP 400).
+            for (tc, name, args), result in zip(prepared, results):
                 payload = json.dumps(result, default=str)
                 if len(payload) > TOOL_RESULT_CHAR_CAP:
                     payload = (payload[:TOOL_RESULT_CHAR_CAP]
@@ -1574,11 +1932,57 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
                 tools_called += 1
                 transcript.append({"tool": name, "args": args,
                                    "result": payload})
+                self._emit_status(
+                    "tool-loop",
+                    f"step {step + 1}/{max_steps} · {name}({_shorten_args(args)})",
+                )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": payload,
                 })
+            if _EVAL_ON and unknown_names and any(
+                    n not in nudged_to_create for n in unknown_names):
+                nudged_to_create.update(unknown_names)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"The tool(s) {', '.join(sorted(set(unknown_names)))} "
+                        "do not exist in this session. Define the tool you need "
+                        "with the create_tool function (name + description + "
+                        "parameter schema + a python body that sets `result`), "
+                        "then call it by name. If a fixed tool already answers "
+                        "the question, use it instead."
+                    ),
+                })
+                messages = self._trim_messages(messages)
+                continue
+            # Phase 19 — the question asks for document text and extract_files
+            # returned .docx blobs WITHOUT text_preview (fragmented transfers
+            # carve the metadata only; the parsed text is not available from
+            # that tool). The model must unzip the carved bytes itself via
+            # python_eval / a create_tool tool. Nudge once.
+            if (_EVAL_ON
+                    and not _DOCX_READ_NUDGED
+                    and _wants_docx_content(question)
+                    and any(_extract_files_returned_docx_without_text(r)
+                            for r in results if isinstance(r, dict))):
+                _DOCX_READ_NUDGED.append(True)
+                hint = _docx_reassembly_hint(context)
+                content = (
+                    "The .docx blobs from extract_files have no "
+                    "text_preview because the document is fragmented across "
+                    "packets. The document text is still readable: use "
+                    "python_eval to unzip the carved docx bytes and extract "
+                    "word/document.xml text, or define a reusable tool with "
+                    "create_tool that does it, then call it. Do not give up "
+                    "— the text is in the capture."
+                )
+                if hint:
+                    content += "\n\n" + hint
+                messages.append({"role": "user", "content": content})
+                messages = self._trim_messages(messages)
+                continue
             # Phase 15 hardening: the model is looping on the same tool
             # call (observed on evidence01 — extract_files/get_transferred_
             # files repeated across all 8 steps). The evidence it needs is
@@ -1623,6 +2027,11 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         except Exception:
             return (None, transcript) if return_transcript else None
         content = (getattr(msg, "content", None) or "").strip()
+        # Architecture fix (2026-08-06) — a final "answer" that is really
+        # tool calls written out as JSON text must not reach the user.
+        # Fall through (None) so the caller's retry/fallback handles it.
+        if _looks_like_tool_plan(content):
+            return (None, transcript) if return_transcript else None
         # Some models ignore tool_choice="none" and still return tool_calls
         # with empty content. If content is empty but tools were called,
         # synthesize an answer from the transcript.
@@ -1665,19 +2074,31 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         # (nemotron-3-ultra-free outputs reasoning as regular content).
         # If there's an "Answer:" somewhere, keep only content from the
         # last "Answer:" onward.
+        kept = None
         if "Answer:" in cleaned:
             last_idx = cleaned.rindex("Answer:")
-            cleaned = cleaned[last_idx:]
+            tail = cleaned[last_idx:]
+            # Architecture fix — models sometimes echo the prompt's format
+            # template ("Answer: <value> (source: <field>)") as part of
+            # their thinking. A real answer has an actual value, not a
+            # template placeholder. Don't cut the reasoning to a template;
+            # fall through to the short-line heuristic instead.
+            m_val = re.search(r"Answer\s*:\s*(\S+)", tail)
+            tpl = m_val.group(1).lower() if m_val else ""
+            if not (tpl.startswith(("<", "{", "[")) or tpl.startswith("<value")):
+                kept = tail
         # Otherwise, if the text is long and reads like reasoning
         # (starts with "The user" / "The question" / "We need to"),
         # try to extract the final short line as the answer.
-        elif len(cleaned) > 300:
+        if kept is None and len(cleaned) > 300:
             lines = [l.strip() for l in cleaned.split("\n") if l.strip()]
             # Find first line that looks like a direct answer (short, concrete)
             for line in reversed(lines):
                 if len(line) < 200 and not line.startswith(("The ", "We ", "I ", "They ")):
-                    cleaned = line
+                    kept = line
                     break
+        if kept is not None:
+            cleaned = kept
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
 

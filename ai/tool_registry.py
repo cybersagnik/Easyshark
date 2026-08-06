@@ -21,16 +21,22 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import signal
 import sys
 import threading
+import time as _time_mod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from core.packet_metadata import PacketMetadata
 
 logger = logging.getLogger(__name__)
+
+
+def _perf_counter() -> float:
+    return _time_mod.perf_counter()
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +395,48 @@ def tool_list_flows(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
 _PY_EVAL_TIMEOUT_SEC = 5.0
 _PY_EVAL_MEM_CAP_BYTES = 50 * 1024 * 1024
 
+# "L3" gate (2026-08-06): python_eval executes LLM-written code. It is
+# therefore OFF by default and only advertised to the model when the
+# analyst opts in (EASYSHARK_ALLOW_PYTHON_EVAL=1). Every execution is
+# audit-logged to ~/.easyshark/python_eval.log for post-hoc review.
+PYTHON_EVAL_ENABLED = os.environ.get("EASYSHARK_ALLOW_PYTHON_EVAL", "0") == "1"
+
+_PY_EVAL_LOG_PATH = None
+
+
+def _log_python_eval(code: str, result: Dict[str, Any],
+                     latency_ms: float, ctx: ToolContext) -> None:
+    """Append one JSONL audit row per python_eval execution (best-effort,
+    never raises). The analyst can review exactly what code the model ran
+    and what it returned."""
+    global _PY_EVAL_LOG_PATH
+    try:
+        import time as _time
+        from pathlib import Path
+        if _PY_EVAL_LOG_PATH is None:
+            _dir = Path.home() / ".easyshark"
+            _dir.mkdir(parents=True, exist_ok=True)
+            _PY_EVAL_LOG_PATH = _dir / "python_eval.log"
+        pcap = getattr(ctx, "pcap_path", None)
+        result_preview = ""
+        if isinstance(result, dict):
+            rv = result.get("result", None)
+            if rv is None:
+                rv = result.get("error", "")
+            result_preview = str(rv)[:200]
+        row = {
+            "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            "pcap": str(pcap) if pcap else None,
+            "code_preview": code[:300],
+            "result_preview": result_preview,
+            "latency_ms": int(latency_ms * 1000),
+            "error": bool(result.get("error")),
+        }
+        with open(str(_PY_EVAL_LOG_PATH), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, default=str) + "\n")
+    except Exception:
+        pass
+
 # Strict allowlist of safe builtins. Anything outside this list is
 # removed from __builtins__ before the snippet runs.
 _PY_EVAL_SAFE_BUILTINS = {
@@ -406,6 +454,12 @@ _PY_EVAL_SAFE_BUILTINS = {
     "reversed": reversed, "round": round, "set": set, "slice": slice,
     "sorted": sorted, "str": str, "sum": sum, "tuple": tuple,
     "type": type, "vars": vars, "zip": zip,
+    # Exception classes so snippets can guard with try/except (observed:
+    # LLM-written zipfile readers use `except Exception as e`).
+    "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
+    "KeyError": KeyError, "IndexError": IndexError, "RuntimeError": RuntimeError,
+    "NameError": NameError, "AttributeError": AttributeError,
+    "BadZipFile": __import__("zipfile").BadZipFile,
 }
 # Lightweight pure-Python modules safe to expose (read-only).
 import collections as _collections
@@ -435,8 +489,11 @@ _PY_EVAL_BANLIST = (
 )
 # Modules the snippet may `import X` for. We rewrite imports at exec
 # time so the underlying __import__ call goes through us, not Python's
-# stock builtin.
-_PY_EVAL_SAFE_MODULES = {"math", "re", "collections", "statistics"}
+# stock builtin. zipfile + io are read-only in-memory ops (unzip a
+# carved blob), no filesystem/network reach — required for reading
+# fragmented docx text via python_eval.
+_PY_EVAL_SAFE_MODULES = {"math", "re", "collections", "statistics",
+                         "zipfile", "io"}
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +700,11 @@ def filter_tool_schemas(triage: Optional[Dict[str, Any]],
     for schema in full:
         fn = (schema.get("function") or {})
         name = fn.get("name")
+        # L3 gate — python_eval runs LLM-written code. Only advertised when
+        # the analyst opts in (EASYSHARK_ALLOW_PYTHON_EVAL=1). create_tool
+        # mints NEW sandboxed tools, so it is gated identically.
+        if name in ("python_eval", "create_tool") and not PYTHON_EVAL_ENABLED:
+            continue
         if name in _TOOL_TRIAGE_KEYS:
             flag = _TOOL_TRIAGE_KEYS[name]
             if flag and not triage.get(flag):
@@ -714,6 +776,16 @@ def _py_eval_alarm(_signum, _frame):
 
 
 def tool_python_eval(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+    """Tool-calling wrapper around run_python_eval. Kept in the registry
+    for the (opt-in) LLM loop; the sandbox itself is run_python_eval."""
+    code = args.get("code", "")
+    if not isinstance(code, str) or not code.strip():
+        return {"error": "missing 'code' argument (must be a non-empty Python snippet)"}
+    return run_python_eval(code, ctx)
+
+
+def run_python_eval(code: str, ctx: ToolContext,
+                    extra_globals: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run a short Python snippet over a read-only namespace of
     {packets, flows, alerts, stats, pcap}. 5s wall-clock timeout;
     50 MB RSS cap; no network / file / subprocess.
@@ -722,8 +794,13 @@ def tool_python_eval(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
     (e.g. "How many DNS queries had entropy > 3.5 bits?"). The code
     MUST set a local variable named ``result`` (string or number) —
     that value is what gets returned to the LLM.
+
+    ``extra_globals`` (optional) merges extra names into the frozen
+    namespace — used by ``create_tool`` so an LLM-written tool body can
+    read its call arguments from a plain ``args`` dict.
+
+    Audit: every run is appended to ~/.easyshark/python_eval.log.
     """
-    code = args.get("code", "")
     if not isinstance(code, str) or not code.strip():
         return {"error": "missing 'code' argument (must be a non-empty Python snippet)"}
     if len(code) > 4000:
@@ -735,7 +812,13 @@ def tool_python_eval(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
         if re.search(rf"\b{re.escape(bad)}\b", code):
             return {"error": f"python_eval: '{bad}' is not allowed in the sandbox"}
 
+    start = _perf_counter()
+
     frozen = _build_py_eval_globals(ctx)
+    if extra_globals:
+        for _k, _v in extra_globals.items():
+            if isinstance(_k, str) and _k.isidentifier() and not _k.startswith("__"):
+                frozen[_k] = _v
 
     use_alarm = sys.platform != "win32"
     previous_handler = None
@@ -758,29 +841,48 @@ def tool_python_eval(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
 
     try:
         # 50 MB RSS cap (best-effort; POSIX-only).
-        # IMPORTANT: save the previous limit and restore it after exec
-        # so the cap doesn't persist for the rest of the shell process.
+        # IMPORTANT: only lower the SOFT limit; leave the hard limit alone.
+        # Lowering the hard limit would make the subsequent restore back to
+        # the original value fail with EPERM (raising a hard limit needs
+        # CAP_SYS_RESOURCE), leaking a 50 MB address-space cap into the
+        # whole shell process.
         prev_as_limit = None
         if sys.platform != "win32":
             try:
                 import resource as _res
                 prev_as_limit = _res.getrlimit(_res.RLIMIT_AS)
+                # The 50 MB budget is a per-snippet ALLOWANCE, not an absolute
+                # cap: the host shell (scapy + flow engine + this module) is
+                # already hundreds of MB of virtual address space, so setting
+                # RLIMIT_AS to a flat 50 MB makes every real allocation in the
+                # snippet fail immediately (observed on the docx-unzip path:
+                # `zipfile.ZipFile` raised MemoryError). Measure current VMSize
+                # and grant the snippet its budget ON TOP of that.
+                _budget = _PY_EVAL_MEM_CAP_BYTES
+                try:
+                    with open("/proc/self/statm") as _statm:
+                        _vmsize_pages = int(_statm.read().split()[0])
+                    _cur_vm = (_vmsize_pages * os.sysconf("SC_PAGE_SIZE"))
+                    _budget += _cur_vm
+                except (OSError, ValueError):
+                    pass
+                new_soft = (_budget
+                            if prev_as_limit[1] == _res.RLIM_INFINITY
+                            else min(_budget, prev_as_limit[1]))
                 _res.setrlimit(_res.RLIMIT_AS,
-                               (_PY_EVAL_MEM_CAP_BYTES,
-                                max(_PY_EVAL_MEM_CAP_BYTES,
-                                    prev_as_limit[1])))
+                               (new_soft, prev_as_limit[1]))
             except (ImportError, ValueError, OSError):
                 prev_as_limit = None
         exec(compile(code, "<python_eval>", "exec"), frozen, frozen)
         result = frozen.get("result", None)
     except _PyEvalTimeout as exc:
-        return {"error": f"python_eval timeout: {exc}"}
+        result = {"error": f"python_eval timeout: {exc}"}
     except MemoryError:
-        return {"error": "python_eval exceeded 50 MB memory cap"}
+        result = {"error": "python_eval exceeded 50 MB memory cap"}
     except SyntaxError as exc:
-        return {"error": f"python_eval syntax error: {exc}"}
+        result = {"error": f"python_eval syntax error: {exc}"}
     except Exception as exc:
-        return {"error": f"python_eval raised {type(exc).__name__}: {exc}"}
+        result = {"error": f"python_eval raised {type(exc).__name__}: {exc}"}
     finally:
         # Restore the original memory limit so subsequent python_eval calls
         # and the rest of the shell aren't stuck under the 50 MB cap.
@@ -800,12 +902,313 @@ def tool_python_eval(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
             timer.cancel()
 
     if timed_out[0]:
-        return {"error": f"python_eval timeout after {_PY_EVAL_TIMEOUT_SEC}s"}
+        result = {"error": f"python_eval timeout after {_PY_EVAL_TIMEOUT_SEC}s"}
 
-    return {
+    out = result if isinstance(result, dict) else {
         "result": result if not callable(result) else repr(result),
         "type":   type(result).__name__,
     }
+    try:
+        _log_python_eval(code, out, _perf_counter() - start, ctx)
+    except Exception:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Tool 13b: create_tool — LLM-driven sandboxed tool creation ("L4").
+#
+# When no fixed tool (or compute_packets / python_eval snippet) can express
+# the computation, the model may define a NEW named tool at runtime:
+#
+#     create_tool({
+#         "name": "count_http_methods",
+#         "description": "Count HTTP methods observed across payloads",
+#         "parameters": {"type": "object",
+#                        "properties": {"pattern": {"type": "string"}}},
+#         "code": "from collections import Counter\n"
+#                 "result = dict(Counter(...))"
+#     })
+#
+# The body runs in the SAME python_eval sandbox (5s timeout, 50 MB cap,
+# banlist, audit log) with the tool's call ``args`` injected as a plain
+# dict named ``args``; it must set ``result``. On success the tool is
+# registered via register_tool() and becomes callable by name in later
+# loop steps (the loop refreshes its schema list each step).
+# ---------------------------------------------------------------------------
+
+# name -> {"description", "parameters", "code"}
+_CREATED_TOOLS: Dict[str, Dict[str, Any]] = {}
+_MAX_CREATED_TOOLS = 8
+
+
+def is_sandboxed_tool(name: str) -> bool:
+    """True when ``name`` is python_eval or an LLM-created tool whose
+    executor runs sandboxed Python (must be excluded from the parallel
+    executor pool — see llm_client query_with_tools)."""
+    if name == "python_eval":
+        return True
+    return name in _CREATED_TOOLS
+
+
+def list_created_tools() -> List[str]:
+    return sorted(_CREATED_TOOLS)
+
+
+def create_runtime_tool(name: str,
+                        description: str,
+                        parameters: Dict[str, Any],
+                        code: str,
+                        ctx: ToolContext) -> Dict[str, Any]:
+    """Validate, dry-run and register an LLM-written sandboxed tool.
+
+    Returns {"created": name, ...} on success or {"error": ...}. The body
+    is executed once in the sandbox with an empty args dict as a dry-run
+    proof-of-life before the tool is registered.
+    """
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", name):
+        return {"error": "create_tool: 'name' must be a lowercase "
+                         "snake_case identifier (2-64 chars)"}
+    if name in TOOL_EXECUTORS:
+        return {"error": f"create_tool: '{name}' already exists"}
+    if len(_CREATED_TOOLS) >= _MAX_CREATED_TOOLS:
+        return {"error": f"create_tool: limit of {_MAX_CREATED_TOOLS} "
+                         "created tools reached"}
+    if not isinstance(description, str) or not description.strip():
+        return {"error": "create_tool: 'description' is required"}
+    if not isinstance(code, str) or not code.strip():
+        return {"error": "create_tool: 'code' is required"}
+    if len(code) > 4000:
+        return {"error": f"create_tool: 'code' too long "
+                         f"({len(code)} chars; max 4000)"}
+    if not isinstance(parameters, dict) or not isinstance(
+            parameters.get("properties", {}), dict):
+        return {"error": "create_tool: 'parameters' must be an object "
+                         "schema with a 'properties' object"}
+
+    # Banlist check against the source before any execution.
+    for bad in _PY_EVAL_BANLIST:
+        if re.search(rf"\b{re.escape(bad)}\b", code):
+            return {"error": f"create_tool: '{bad}' is not allowed in the sandbox"}
+
+    # Dry-run proof-of-life: run the body once with empty args.
+    probe = run_python_eval(code, ctx, extra_globals={"args": {}})
+    if isinstance(probe, dict) and probe.get("error"):
+        return {"error": f"create_tool: dry-run failed: {probe['error']}"}
+
+    def _executor(args: Dict[str, Any], tool_ctx: ToolContext) -> Dict[str, Any]:
+        return run_python_eval(code, tool_ctx, extra_globals={"args": args or {}})
+
+    schema = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description[:500],
+            "parameters": parameters,
+        },
+    }
+    register_tool(name, schema["function"], _executor)
+    _CREATED_TOOLS[name] = {
+        "description": description,
+        "parameters": parameters,
+        "code": code,
+    }
+    logger.info("create_tool: registered sandboxed tool '%s'", name)
+    return {"created": name,
+            "created_tools": sorted(_CREATED_TOOLS),
+            "hint": f"Now call {name} with the arguments you need."}
+
+
+def tool_create_tool(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+    """Tool-calling wrapper around create_runtime_tool (gated with
+    python_eval behind EASYSHARK_ALLOW_PYTHON_EVAL=1)."""
+    return create_runtime_tool(
+        name=args.get("name", ""),
+        description=args.get("description", ""),
+        parameters=args.get("parameters", {}) or {},
+        code=args.get("code", ""),
+        ctx=ctx,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool 14: compute_packets (structured query DSL — "L2" 2026-08-06).
+# The safer middle layer between the fixed tools and free-form python_eval:
+# group / aggregate / filter over PacketMetadata with arguments only — no
+# code, no eval. Fully deterministic and sandboxed by construction.
+# ---------------------------------------------------------------------------
+_COMPUTE_FIELDS = {
+    "src_ip": "src_ip", "dst_ip": "dst_ip", "protocol": "protocol",
+    "src_port": "src_port", "dst_port": "dst_port",
+    "src_mac": "src_mac", "dst_mac": "dst_mac",
+    "tcp_flags": "tcp_flags", "ip_proto": "ip_proto",
+    "length": "length", "payload_size": "payload_size",
+    "ttl": "ttl", "timestamp": "timestamp",
+}
+_NUMERIC_FIELDS = {"length", "payload_size", "ttl", "timestamp",
+                   "src_port", "dst_port", "ip_proto"}
+
+
+def _compute_where(expr: str):
+    """Parse a tiny, safe filter DSL and return a packet->bool predicate.
+
+    Grammar: terms joined by && / and (AND) and || / or (OR).
+    term := <field> <op> <value>   with op in == != >= <= > <
+    Values are integers, floats, or single/double-quoted strings. Field
+    names are validated against _COMPUTE_FIELDS — unknown fields raise
+    ValueError. No eval() is ever used.
+    """
+    if not expr or not expr.strip():
+        return lambda p: True
+
+    def parse_term(term):
+        term = term.strip()
+        m = re.match(r"^(\w+)\s*(==|!=|>=|<=|>|<)\s*(.+)$", term)
+        if not m:
+            raise ValueError(f"bad filter term: {term!r}")
+        field, op, raw = m.group(1), m.group(2), m.group(3).strip()
+        if field not in _COMPUTE_FIELDS:
+            raise ValueError(
+                f"unknown filter field {field!r}; allowed: "
+                f"{sorted(_COMPUTE_FIELDS)}")
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+            value = raw[1:-1]
+        elif re.fullmatch(r"[+-]?\d+", raw):
+            value = int(raw)
+        elif re.fullmatch(r"[+-]?\d+(\.\d+)?([eE][+-]?\d+)?", raw):
+            value = float(raw)
+        else:
+            raise ValueError(
+                f"bad filter value {raw!r} for field {field!r}; "
+                f"use a quoted string or a number")
+        attr = _COMPUTE_FIELDS[field]
+
+        def pred(p, _op=op, _attr=attr, _value=value):
+            actual = getattr(p, _attr, None)
+            if actual is None:
+                return False
+            if isinstance(_value, str):
+                actual = str(actual)
+            elif isinstance(_value, float):
+                try:
+                    actual = float(actual)
+                except (TypeError, ValueError):
+                    return False
+            else:
+                try:
+                    actual = int(actual)
+                except (TypeError, ValueError):
+                    return False
+            if _op == "==":
+                return actual == _value
+            if _op == "!=":
+                return actual != _value
+            if _op == ">":
+                return actual > _value
+            if _op == ">=":
+                return actual >= _value
+            if _op == "<":
+                return actual < _value
+            return actual <= _value
+
+        return pred
+
+    or_parts = re.split(r"\s*\|\|\s*|\s+or\s+", expr)
+    or_preds = []
+    for part in or_parts:
+        and_terms = re.split(r"\s*&&\s*|\s+and\s+", part)
+        and_preds = [parse_term(t) for t in and_terms if t.strip()]
+        or_preds.append(lambda p, ands=and_preds: all(f(p) for f in ands))
+
+    def combined(p):
+        return any(f(p) for f in or_preds)
+
+    return combined
+
+
+def _aggregate_values(group, aggregate: str, on: Optional[str]):
+    if aggregate == "count":
+        return len(group)
+    if not on:
+        raise ValueError(f"{aggregate} requires an 'on' field")
+    if aggregate == "count_distinct":
+        return len({getattr(p, _COMPUTE_FIELDS[on]) for p in group
+                    if getattr(p, _COMPUTE_FIELDS[on]) is not None})
+    vals = [getattr(p, _COMPUTE_FIELDS[on]) for p in group]
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    if aggregate == "sum":
+        return sum(vals)
+    if aggregate == "avg":
+        return round(sum(vals) / len(vals), 4)
+    if aggregate == "min":
+        return min(vals)
+    return max(vals)
+
+
+def tool_compute_packets(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+    """Structured aggregation over PacketMetadata.
+
+    Supports count / count_distinct / sum / avg / min / max, optionally
+    grouped by a packet field and filtered by a small where-clause. No
+    code is executed — the DSL is parsed and validated before any work.
+    """
+    group_by = args.get("group_by") or ""
+    aggregate = (args.get("aggregate") or "count").lower()
+    on = args.get("on") or ""
+    where = args.get("where") or ""
+    try:
+        limit = max(1, min(int(args.get("limit") or 10), 50))
+    except (TypeError, ValueError):
+        limit = 10
+
+    if group_by and group_by not in _COMPUTE_FIELDS:
+        return {"error": f"unknown group_by field {group_by!r}; "
+                         f"allowed: {sorted(_COMPUTE_FIELDS)}"}
+    if on and on not in _COMPUTE_FIELDS:
+        return {"error": f"unknown 'on' field {on!r}; allowed: "
+                         f"{sorted(_COMPUTE_FIELDS)}"}
+    valid_aggs = {"count", "count_distinct", "sum", "avg", "min", "max"}
+    if aggregate not in valid_aggs:
+        return {"error": f"unknown aggregate {aggregate!r}; allowed: "
+                         f"{sorted(valid_aggs)}"}
+    if aggregate in ("sum", "avg", "min", "max") and on and on not in _NUMERIC_FIELDS:
+        return {"error": f"aggregate {aggregate} needs a numeric 'on' field; "
+                         f"{on!r} is not numeric"}
+    try:
+        pred = _compute_where(where)
+    except ValueError as exc:
+        return {"error": f"bad 'where' clause: {exc}"}
+
+    matched = [p for p in ctx.packets if pred(p)]
+
+    if not group_by:
+        try:
+            result = _aggregate_values(matched, aggregate, on)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"matched": len(matched), "result": result,
+                "type": type(result).__name__ if result is not None else "none"}
+
+    buckets: Dict[Any, List[Any]] = {}
+    for p in matched:
+        key = getattr(p, _COMPUTE_FIELDS[group_by])
+        buckets.setdefault(key, []).append(p)
+    rows = []
+    for key, group in buckets.items():
+        try:
+            value = _aggregate_values(group, aggregate, on)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        rows.append({"key": key, "value": value})
+    # Sort by value descending (None last), stable.
+    rows.sort(key=lambda r: (
+        1 if r["value"] is None else 0,
+        -(r["value"] if isinstance(r["value"], (int, float)) else 0),
+        str(r["key"])))
+    return {"matched": len(matched), "group_by": group_by,
+            "aggregate": aggregate, "on": on, "rows": rows[:limit]}
 
 
 # ---------------------------------------------------------------------------
@@ -824,6 +1227,8 @@ TOOL_EXECUTORS: Dict[str, Callable[[Dict[str, Any], ToolContext], Dict[str, Any]
     "get_packet_detail":    tool_get_packet_detail,
     "list_flows":           tool_list_flows,
     "python_eval":          tool_python_eval,
+    "create_tool":          tool_create_tool,
+    "compute_packets":      tool_compute_packets,
     # Phase 15 — dissection-aware tools.
     "get_http_requests":    tool_get_http_requests,
     "get_dns_queries":      tool_get_dns_queries,
@@ -1049,6 +1454,63 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "compute_packets",
+            "description": (
+                "Structured aggregation over packet metadata — count, "
+                "count_distinct, sum, avg, min, max — optionally grouped by "
+                "a field and filtered by a small where-clause. No code is "
+                "executed; the DSL is parsed and validated safely. "
+                "group_by/on fields: src_ip, dst_ip, protocol, src_port, "
+                "dst_port, src_mac, dst_mac, tcp_flags, ip_proto, length, "
+                "payload_size, ttl, timestamp. "
+                "where: terms like field==value or field>=123 joined by && "
+                "(and) and || (or); string values in single/double quotes.\n"
+                "Examples:\n"
+                "  -> compute_packets({\"group_by\": \"protocol\", "
+                "\"aggregate\": \"count\"})\n"
+                "  -> 'how many packets to port 443 by 192.168.1.158?' -> "
+                "compute_packets({\"aggregate\": \"count\", \"where\": "
+                "\"dst_port == 443 && src_ip == '192.168.1.158'\"})\n"
+                "  -> 'how many distinct dst IPs?' -> compute_packets({"
+                "\"aggregate\": \"count_distinct\", \"on\": \"dst_ip\"})\n"
+                "  -> 'avg packet length per protocol?' -> compute_packets({"
+                "\"group_by\": \"protocol\", \"aggregate\": \"avg\", "
+                "\"on\": \"length\"})\n"
+                "  -> 'total bytes per dst port for TCP' -> compute_packets({"
+                "\"group_by\": \"dst_port\", \"aggregate\": \"sum\", "
+                "\"on\": \"length\", \"where\": \"protocol == 'TCP'\"})"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "group_by": {"type": "string",
+                                 "description": "Field to bucket results by "
+                                                "(optional; omit for a single "
+                                                "aggregate value)"},
+                    "aggregate": {"type": "string",
+                                  "enum": ["count", "count_distinct", "sum",
+                                           "avg", "min", "max"],
+                                  "description": "Aggregation to apply. "
+                                                 "Default: count."},
+                    "on": {"type": "string",
+                           "description": "Field to aggregate over "
+                                          "(required for count_distinct/sum/"
+                                          "avg/min/max)"},
+                    "where": {"type": "string",
+                              "description": "Optional filter, e.g. "
+                                             "\"dst_port == 443 && "
+                                             "protocol == 'TCP'\""},
+                    "limit": {"type": "integer",
+                              "description": "Max rows to return (1-50, "
+                                             "default 10)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "python_eval",
             "description": (
                 "Run a short Python snippet over a frozen, read-only context "
@@ -1065,7 +1527,10 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "and e(p.payload[:32]) > 3.5)\\nresult = f'{hi} high-entropy DNS queries'\"})\n"
                 "  -> python_eval({\"code\": \"result = sorted(Counter(p.dst_ip for p in packets).items(), key=lambda kv: -kv[1])[:5]\"})\n"
                 "Always assign the variable `result` (string/number/list). "
-                "USE THIS when the question is novel and no other tool fits."
+                "LAST RESORT ONLY — use compute_packets first for group/count/"
+                "filter/aggregate questions (it is deterministic and needs no "
+                "code); fall back to python_eval only when compute_packets "
+                "cannot express the computation."
             ),
             "parameters": {
                 "type": "object",
@@ -1074,6 +1539,57 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                              "description": "Python snippet; must set `result`. Max 4000 chars."},
                 },
                 "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_tool",
+            "description": (
+                "Define a NEW sandboxed tool at runtime when NO existing "
+                "tool can express the computation. Provide a unique lowercase "
+                "snake_case name, a description, a JSON parameter schema, and "
+                "a Python body. The body runs in the same read-only sandbox "
+                "as python_eval (5s timeout, 50MB cap, no network/file/"
+                "subprocess) with your call arguments injected as a plain "
+                "dict named `args`; it MUST set `result`. After it is "
+                "created you can call it by name in later steps.\n"
+                "Examples:\n"
+                "  -> create_tool({\"name\": \"count_smtp_verbs\", "
+                "\"description\": \"Count SMTP command verbs across all "
+                "streams\", \"parameters\": {\"type\": \"object\", "
+                "\"properties\": {}}, \"code\": \"from collections import "
+                "Counter\\nverbs = Counter()\\nfor p in packets:\\n    pl = "
+                "(getattr(p, 'payload', b'') or b'').decode('latin-1', "
+                "'replace')\\n    for v in ('EHLO', 'MAIL', 'RCPT', 'DATA', "
+                "'QUIT'):\\n        verbs[v] += pl.count(v)\\nresult = "
+                "dict(verbs)\"})\n"
+                "Use this ONLY when compute_packets / python_eval / the "
+                "fixed tools cannot answer — prefer existing tools first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "Lowercase snake_case identifier "
+                                            "for the new tool (2-64 chars)."},
+                    "description": {"type": "string",
+                                    "description": "What the tool computes, "
+                                                   "for the LLM's schema."},
+                    "parameters": {"type": "object",
+                                   "description": "JSON schema for the tool's "
+                                                  "call arguments, e.g. "
+                                                  "{\"type\": \"object\", "
+                                                  "\"properties\": {\"x\": "
+                                                  "{\"type\": \"integer\"}}}."},
+                    "code": {"type": "string",
+                             "description": "Python body; `args` dict and "
+                                            "packets/flows/alerts/stats are in "
+                                            "scope. Must set `result`. Max "
+                                            "4000 chars."},
+                },
+                "required": ["name", "description", "parameters", "code"],
             },
         },
     },

@@ -73,10 +73,22 @@ class InvestigateCommandHandler:
                 not self.shell.llm_client.is_available():
             return ("LLM client unavailable. Cannot run investigation.\n"
                     "  Start Ollama:  ollama serve")
+
+        # ---- Live activity status on stderr (cli/status.py) ----------- #
+        from cli.status import status, status_finish
+        if hasattr(self.shell.llm_client, "set_status_callback"):
+            self.shell.llm_client.set_status_callback(status)
+
         if linear:
-            return self._run_linear(auto=auto, header_line=(
-                "INVESTIGATION  (linear hypothesis → verify → conclude)  [--linear]"))
-        return self._run_dag(auto=auto, question=question)
+            try:
+                return self._run_linear(auto=auto, header_line=(
+                    "INVESTIGATION  (linear hypothesis → verify → conclude)  [--linear]"))
+            finally:
+                status_finish("investigation complete")
+        try:
+            return self._run_dag(auto=auto, question=question)
+        finally:
+            status_finish("investigation complete")
 
     # ------------------------------------------------------------------ #
     # Linear path (debug / regression) — Phase 9 §9.4 --linear flag       #
@@ -92,6 +104,8 @@ class InvestigateCommandHandler:
         def emit(event: str, payload: Dict[str, Any]):
             """Print progress to stdout during the loop."""
             if event == "narrative_ready":
+                from cli.status import status
+                status("investigate", f"narrative ({payload['narrative_chars']} chars)")
                 out.append(f"  narrative built ({payload['narrative_chars']} chars, "
                            f"{payload['anomaly_count']} anomalies)")
             elif event == "hypotheses_ready":
@@ -100,6 +114,10 @@ class InvestigateCommandHandler:
                     out.append(f"    - {n}")
                 out.append("")
             elif event == "hypothesis_start":
+                from cli.status import status
+                status("investigate",
+                       f"hypothesis {payload['index']}/{payload['total']} · "
+                       f"{payload['name'][:40]}")
                 idx, total = payload["index"], payload["total"]
                 out.append("─" * 67)
                 out.append(f"HYPOTHESIS {idx}/{total}  [confidence: {payload['confidence'].upper()}]")
@@ -128,8 +146,11 @@ class InvestigateCommandHandler:
                         payload["_skip_this"] = True
                     out.append("")
             elif event == "hypothesis_verdict":
+                from cli.status import status
                 verdict = (payload.get("verdict") or "?").upper()
                 conf = (payload.get("confidence_after") or "?").upper()
+                status("investigate",
+                       f"verdict {verdict} · {payload.get('name','')[:40]}")
                 out.append("─" * 67)
                 out.append(f"VERDICT: {verdict}  [confidence: {conf}]")
                 if payload.get("evidence_found"):
@@ -299,6 +320,9 @@ class InvestigateCommandHandler:
 
         def emit(event: str, payload: Dict[str, Any]):
             if event == "hypothesis_start":
+                from cli.status import status
+                status("investigate",
+                       f"hypothesis {payload['id']} · {payload['name'][:40]}")
                 line = (CYAN + f"  {payload['id']}: "
                         f"{payload['name'][:58]} ..." + RESET)
                 status_line[payload["id"]] = line

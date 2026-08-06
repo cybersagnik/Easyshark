@@ -240,11 +240,11 @@ class AICommandHandler:
             print("AI explainer not initialized")
             return
 
-        # Planner stage: ask the LLM (or the heuristic) to map the user
-        # utterance to a directive. If the result is a recognised shell
-        # verb, run it directly — avoids an expensive explainer
-        # round-trip. "analyze ..." directives fall through to the
-        # explainer.
+        # Planner stage: heuristic-only (allow_llm=False). The planner's
+        # LLM round-trip used to fire on EVERY natural-language question
+        # and usually just echoed "analyze ..." back — a full wasted
+        # cloud call. Verb dispatch still works via the heuristic stage;
+        # everything else falls through to the explainer directly.
         directive: Optional[str] = None
         if self.planner:
             try:
@@ -260,6 +260,7 @@ class AICommandHandler:
                             len(r.get_alerts()) for r in self.shell.rules),
                         "triage": self.shell.triage,
                     },
+                    allow_llm=False,
                 )
             except Exception as exc:
                 logger.warning("planner.plan failed: %s", exc)
@@ -277,7 +278,14 @@ class AICommandHandler:
                     query = tail[1]
 
         print(f"\nAnalyzing: {query}")
-        print("Querying AI model (this may take 30-90 seconds on CPU)...\n")
+
+        # ---- Live activity status on stderr (cli/status.py) ----------- #
+        # Bypasses the shell's stdout redirect; shows provider, tool-loop
+        # and streaming progress instead of a silent 30-90s wait.
+        from cli.status import status, status_clear, status_finish
+        if self.llm is not None and hasattr(self.llm, "set_status_callback"):
+            self.llm.set_status_callback(status)
+        status("preparing", "evidence bundle + context")
 
         # Phase 16 Task 2 — conversation continuity. Inject the last few
         # Q&A pairs from the active session so the LLM can answer
@@ -293,6 +301,7 @@ class AICommandHandler:
                 logger.debug("session context fetch failed: %s", exc)
 
         try:
+            status("analyzing", "evidence-seeded single-shot")
             response = self.explainer.explain_traffic(
                 query, packets, flows, alerts,
                 rules=self.shell.rules,
@@ -301,8 +310,10 @@ class AICommandHandler:
                 triage=self.shell.triage,
                 dissection=getattr(self.shell, "dissection", None),
                 conversation_context=conv_ctx,
+                pcap_path=self.shell.pcap_file,
             )
             if response is None:
+                status_finish("no LLM answer")
                 if _NO_OFFLINE_FALLBACK:
                     print("[LLM returned no answer — none produced]")
                 else:
@@ -314,21 +325,26 @@ class AICommandHandler:
             # prompt that asks for evidence citation explicitly.
             if "insufficient data" in (response or "").lower() and \
                os.environ.get("EASYSHARK_HEURISTIC_RETRY", "1") == "1":
+                status("retrying", "focused evidence hint")
                 retry_resp = self._retry_with_hint(query, packets, flows, alerts)
                 if retry_resp and "insufficient data" not in retry_resp.lower():
+                    status_finish("answer ready")
                     self._print_with_verification(
                         retry_resp, query, packets, flows, streamed=_STREAMING)
                     self._record_session_turn(query, retry_resp or "")
                     return
 
+            status_finish("answer ready")
             final = self._print_with_verification(response, query, packets, flows)
             self._record_session_turn(query, final or "")
         except MemoryError:
+            status_finish("OOM — offline summary")
             logger.warning("OOM during AI analysis — offline fallback")
             print("\nAI analysis ran out of memory — showing the deterministic "
                   "offline summary instead.\n")
             self._offline_summarize(query, packets, flows, alerts)
         except Exception as exc:
+            status_finish("error — offline summary")
             logger.error("AI analysis error: %s", exc, exc_info=True)
             print(f"Error during analysis: {exc}")
             print("Showing the deterministic offline summary instead:\n")
@@ -362,27 +378,28 @@ class AICommandHandler:
         the backend line + grounding."""
         final = response or ""
 
-        # 7.1 + 7.2: extract claims and (when many) try a self-critique.
+        # 7.1 + 7.2: extract claims from the answer.
         try:
             claims = _extract_claims(final)
             n_claims = sum(len(v) for v in claims.values())
-            # Only run self-critique when there are several concrete
-            # claims — single-fact answers don't benefit and one extra
-            # LLM call per question adds ~15 s. Also skip when streamed:
-            # the answer text is already on screen and can't be revised.
-            if n_claims >= 3 and self.llm and self.llm.is_available() and \
-               not streamed and \
-               os.environ.get("EASYSHARK_SELF_CRITIQUE", "1") == "1":
-                evidence = _grounding_evidence_text(packets, flows)
-                revised = _self_critique(final, evidence, self.llm)
-                if revised:
-                    final = revised
-                    # Re-extract from the revised answer so the
-                    # grounding pass reflects what we will print.
-                    claims = _extract_claims(final)
         except Exception as exc:
-            logger.debug("claim extraction / self-critique failed: %s", exc)
+            logger.debug("claim extraction failed: %s", exc)
             claims = {}
+
+        # Architecture fix — the self-critique used to be a second
+        # BLOCKING LLM call on every multi-claim answer. It now runs in a
+        # background daemon thread (like the hallucination detector) and
+        # prints a revision addendum if it produces one. The original
+        # answer + grounding are never delayed by it. Skipped entirely
+        # when the answer was already streamed.
+        if n_claims >= 3 and self.llm and self.llm.is_available() and \
+           not streamed and \
+           os.environ.get("EASYSHARK_SELF_CRITIQUE", "1") == "1":
+            try:
+                evidence = _grounding_evidence_text(packets, flows)
+                _async_self_critique(self.llm, final, evidence)
+            except Exception as exc:
+                logger.debug("async self-critique launch failed: %s", exc)
 
         # Print the final answer.
         if not streamed:
@@ -401,7 +418,9 @@ class AICommandHandler:
             logger.debug("grounding pass failed: %s", exc)
 
         # 7.3: kick off async hallucination detector (non-blocking).
-        # Uses a daemon thread so it never delays the analyst.
+        # Uses a daemon thread so it never delays the analyst. Result is
+        # written to the log file, NOT stdout — surfacing raw confidence
+        # scores after the boxed answer pollutes the shell prompt.
         try:
             from ai.hallucination_detector import run_async_score
             run_async_score(
@@ -410,14 +429,9 @@ class AICommandHandler:
                 packets=packets,
                 flows=flows,
                 shell=self.shell,
-                on_result=lambda r: print(
-                    "\n[hallucination detector] "
-                    f"score={r.score:.2f} "
-                    + ("(LOW CONFIDENCE — verify manually)"
-                       if r.score > 0.7 else
-                       "(high confidence)")
-                    + (("\n  flagged: " + ", ".join(r.flagged_claims))
-                       if r.flagged_claims else "")
+                on_result=lambda r: logger.info(
+                    "hallucination detector: score=%.2f flagged=%s",
+                    r.score, r.flagged_claims,
                 ),
             )
         except MemoryError:
@@ -898,10 +912,31 @@ def _format_grounding(tags: Dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _async_self_critique(llm_client, answer: str, claims_text: str) -> None:
+    """Run the self-critique in a background daemon thread and print a
+    revision addendum when one is produced. Best-effort — never blocks
+    the shell, never raises into the main thread."""
+    import threading
+
+    def _run():
+        try:
+            revised = _self_critique(answer, claims_text, llm_client)
+        except Exception:
+            revised = None
+        if revised and revised.strip():
+            try:
+                logger.info("self-critique revision:\n%s", revised.strip())
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, daemon=True,
+                     name="self-critique").start()
+
+
 def _self_critique(answer: str, claims_text: str, llm_client) -> Optional[str]:
     """Ask the LLM to review its own answer for unsupported claims.
 
-    Single extra call to qwen2.5:7b. Returns a corrected answer string
+    Single extra call. Returns a corrected answer string
     or None if no revision is warranted / LLM is unavailable.
     """
     if not llm_client or not llm_client.is_available():

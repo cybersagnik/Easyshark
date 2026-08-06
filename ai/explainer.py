@@ -20,8 +20,80 @@ from ai.tool_registry import ToolContext
 from collections import Counter
 from typing import Any, Dict, List, Optional
 import logging
+import os
+import re
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Architecture fix (2026-08-06): the tool-calling loop used to be the primary
+# answer path, making the model "discover" facts through 3-6 serial full
+# round-trips. The deterministic evidence bundle (ai/evidence.py) is now
+# extracted once per capture and given to the model up-front so it can answer
+# in ONE streaming round. The tool loop remains as a fallback for questions
+# the bundle does not cover.
+# ---------------------------------------------------------------------------
+# Free-tier reasoning models (deepseek-v4-flash-free via Zen) think out loud
+# before answering. 500 tokens was enough for their deliberation but NOT for
+# the trailing "Answer: ..." line, so the reply came back truncated mid-thought.
+# 1200 gives a short deliberation + the answer line a realistic chance to
+# complete; the tool loop still catches everything the single shot misses.
+SINGLE_SHOT_MAX_TOKENS = 1200
+
+# Architecture fix (2026-08-06) — the single-shot evidence path must NOT
+# receive the tools-advertising explainer prompt: the request is a plain
+# completion with no tool schemas, and a tools-laden system prompt makes
+# free-tier models print their intended calls as literal JSON text instead
+# of answering. A minimal prompt keeps them answering from the evidence.
+_NO_TOOLS_SYSTEM_PROMPT = (
+    "You are a network forensics analyst. You are given an evidence digest "
+    "extracted from a packet capture. Answer the analyst's question using "
+    "ONLY the evidence digest. You have NO tools available — never mention, "
+    "propose, or output tool calls, JSON, or function invocations."
+)
+
+_ANSWER_LINE_RE = re.compile(r"^\s*Answer\s*:\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def _valid_answer_value(value: str) -> bool:
+    """True when the text after 'Answer:' is a real value, not a template
+    placeholder or an empty slot."""
+    v = value.strip()
+    if not v:
+        return False
+    low = v.lower()
+    if low.startswith(("<value", "<field", "<tool", "{", "[")):
+        return False
+    return True
+
+
+def _extract_single_shot_answer(text: Optional[str]) -> Optional[str]:
+    """Return the genuine ``Answer: <value>`` from a single-shot reply, or
+    None.
+
+    Free-tier reasoning models (deepseek-v4-flash-free via Zen) think out
+    loud and frequently echo the prompt's format template (``Answer: <value>
+    (source: <field>)'``) as part of that thinking — often in the same
+    paragraph as the real answer. Only a real value counts: the template
+    echo and a truncated deliberation (no answer line at all) both return
+    None, so the caller falls through to the tool loop instead of printing
+    deliberation garbage.
+    """
+    if not text:
+        return None
+    # 1) Prefer a line that begins with "Answer:".
+    for line in reversed(text.splitlines()):
+        m = _ANSWER_LINE_RE.match(line)
+        if m and _valid_answer_value(m.group(1)):
+            return line.strip()
+    # 2) Otherwise grab the text after the LAST "Answer:" anywhere —
+    #    reasoning models often write the answer mid-paragraph.
+    idx = text.lower().rfind("answer:")
+    if idx >= 0:
+        tail = text[idx + len("answer:"):].strip()
+        if _valid_answer_value(tail) and len(tail) <= 300:
+            return "Answer: " + tail
+    return None
 
 
 class TrafficExplainer:
@@ -70,6 +142,18 @@ class TrafficExplainer:
                 + "\n\nCURRENT QUESTION: " + question
             )
 
+        # Architecture fix — deterministic evidence bundle, built (and
+        # cached) once per capture. Fed to the model so one streaming
+        # round suffices for questions the extractors already cover.
+        bundle = ""
+        try:
+            from ai.evidence import build_evidence_bundle
+            bundle = build_evidence_bundle(
+                packets=packets, flows=flows, alerts=alerts,
+                dissection=dissection, pcap_path=pcap_path)
+        except Exception as exc:
+            logger.debug("evidence bundle failed: %s", exc)
+
         # Phase 14 TASK 2 — compact system prompt from triage + patterns.
         system_prompt = None
         try:
@@ -79,8 +163,24 @@ class TrafficExplainer:
         except Exception as exc:
             logger.debug("prompt_optimizer explainer failed: %s", exc)
 
+        # ---- Primary path: single-shot streaming over the evidence ----
+        if bundle:
+            single = self._explain_from_evidence(
+                question, bundle, system_prompt=system_prompt)
+            if single:
+                return single
+
+        # ---- Fallback: tool-calling loop, seeded with the evidence -----
+        if bundle:
+            question = (
+                question
+                + "\n\n[DETERMINISTIC EVIDENCE from capture pre-analysis "
+                "(use it; the tools below return the same data)]\n"
+                + bundle
+            )
         response = self.llm.query_with_tools(
-            question=question, context=ctx, system_prompt=system_prompt)
+            question=question, context=ctx, system_prompt=system_prompt,
+            evidence_seeded=bool(bundle))
         if response:
             return response
 
@@ -96,6 +196,21 @@ class TrafficExplainer:
             "call it, then answer concisely from the result. After you get the "
             "tool result, reply 'Answer: <value> (source: <tool>).'"
         )
+        # L3 gate — when the analyst opted into LLM-written code, remind the
+        # model it has the python_eval escape hatch (and the create_tool
+        # escape hatch for minting new named tools) for computations no
+        # fixed tool can express.
+        if os.environ.get("EASYSHARK_ALLOW_PYTHON_EVAL", "0") == "1":
+            retry_prompt += (
+                "\n\nIf no existing tool can express the computation, write a "
+                "short python_eval snippet over {packets, flows, alerts, "
+                "stats} that sets result = <answer> — but try the dedicated "
+                "tools first. If you need a reusable computation, define a new "
+                "tool with create_tool (name + description + parameter schema "
+                "+ a python body over {packets, flows, alerts, stats} that "
+                "sets result, reading call args from the dict `args`), then "
+                "call it by name."
+            )
         response = self.llm.query_with_tools(
             question=question, context=ctx,
             system_prompt=retry_prompt)
@@ -108,6 +223,69 @@ class TrafficExplainer:
         return self._fallback_analysis(
             question, self._create_summary(packets, flows, alerts, dissection)
         )
+
+    # ------------------------------------------------------------------ #
+    # Evidence-seeded single-shot (architecture fix — primary path)     #
+    # ------------------------------------------------------------------ #
+    def _explain_from_evidence(self,
+                               question: str,
+                               bundle: str,
+                               system_prompt: Optional[str] = None) -> Optional[str]:
+        """One streaming round over the deterministic evidence bundle.
+
+        Returns the answer string, or None when the model surrenders
+        ('Insufficient data') or the call fails — the caller then falls
+        through to the tool-calling loop. Never blocks on a second call.
+        """
+        prompt = (
+            "Question: " + question + "\n\n"
+            + bundle + "\n\n"
+            "Rules:\n"
+            "1. Do not write out your reasoning or analysis — think "
+            "internally and output only the answer.\n"
+            "2. The VERY LAST line of your reply must be the answer, "
+            "formatted exactly: Answer: <value> (source: <field>)\n"
+            "3. Do not quote, repeat, or explain this format instruction "
+            "in your reply.\n"
+            "4. If the evidence above does not contain the answer, make "
+            "the last line exactly: Insufficient data"
+        )
+        try:
+            if hasattr(self.llm, "query_stream"):
+                parts = []
+                for delta in self.llm.query_stream(
+                        prompt, model_type="explainer", temperature=0.1,
+                        max_tokens=SINGLE_SHOT_MAX_TOKENS,
+                        system_prompt=_NO_TOOLS_SYSTEM_PROMPT):
+                    if delta:
+                        parts.append(delta)
+                text = "".join(parts).strip()
+            else:
+                text = self.llm.query(
+                    prompt, model_type="explainer", temperature=0.1,
+                    max_tokens=SINGLE_SHOT_MAX_TOKENS,
+                    system_prompt=_NO_TOOLS_SYSTEM_PROMPT) or ""
+                text = text.strip()
+        except Exception as exc:
+            logger.debug("evidence single-shot failed: %s", exc)
+            return None
+        if not text or "insufficient data" in text.lower():
+            return None
+        # Architecture fix — a reply that is really tool calls written out
+        # as JSON ({"tool": ...}) is not an answer; fall through so the
+        # tool loop can handle it properly.
+        try:
+            from ai.llm_client import _looks_like_tool_plan
+            if _looks_like_tool_plan(text):
+                return None
+        except Exception:
+            pass
+        # Architecture fix — reasoning models echo the format template
+        # ("Answer: <value> (source: ...)") mid-thought. Generic strip
+        # helpers get fooled by that; extract only a REAL last Answer line.
+        # When none exists (truncated before answering), fall through to
+        # the tool loop rather than print deliberation.
+        return _extract_single_shot_answer(text)
 
     # ------------------------------------------------------------------ #
     # Legacy single-prompt path                                          #

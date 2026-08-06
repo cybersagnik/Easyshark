@@ -36,10 +36,13 @@ class CommandPlanner:
     # ------------------------------------------------------------------ #
     # Public entry                                                        #
     # ------------------------------------------------------------------ #
-    def plan(self, user_input: str, context: Dict[str, Any]) -> Optional[str]:
+    def plan(self, user_input: str, context: Dict[str, Any],
+             allow_llm: bool = True) -> Optional[str]:
         directive = self._heuristic(user_input)
         if directive:
             return directive
+        if not allow_llm:
+            return None
         if not self.llm or not self.llm.is_available():
             return None
         prompt = self._build_llm_prompt(user_input, context)

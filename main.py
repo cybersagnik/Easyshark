@@ -15,6 +15,7 @@ import logging
 import re
 import sys
 import textwrap
+from pathlib import Path
 
 
 # ANSI colour constants (TUI redesign)
@@ -179,9 +180,15 @@ def main(argv=None):
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
     args = parser.parse_args(argv)
 
+    log_dir = Path.home() / ".easyshark"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handlers = [logging.FileHandler(log_dir / "easyshark.log", encoding="utf-8")]
+    if args.debug:
+        handlers.append(logging.StreamHandler())
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=handlers,
     )
 
     from core.session_manager import SessionManager
@@ -215,7 +222,6 @@ def main(argv=None):
         if not pcap:
             pcap = session.pcap_path
         if pcap:
-            from pathlib import Path
             if not Path(pcap).exists():
                 print(f"Warning: PCAP from session not found: {pcap}")
     if not pcap:

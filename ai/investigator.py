@@ -331,7 +331,9 @@ def investigate(shell, on_event: Optional[Callable[[str, Dict[str, Any]], None]]
     ctx = ToolContext(packets=packets, flows=flows, alerts=alerts,
                       stats_engine=getattr(shell, "stats_engine", None),
                       flow_engine=getattr(shell, "flow_engine", None),
-                      pcap_path=getattr(shell, "pcap_file", None))
+                      pcap_path=getattr(shell, "pcap_file", None),
+                      triage=getattr(shell, "triage", None),
+                      dissection=getattr(shell, "dissection", None))
 
     for h in report.hypotheses:
         if on_event:

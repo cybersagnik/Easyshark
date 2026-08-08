@@ -314,7 +314,9 @@ class InvestigateCommandHandler:
         ctx = ToolContext(packets=packets, flows=flows, alerts=alerts,
                           stats_engine=getattr(self.shell, "stats_engine", None),
                           flow_engine=getattr(self.shell, "flow_engine", None),
-                          pcap_path=getattr(self.shell, "pcap_file", None))
+                          pcap_path=getattr(self.shell, "pcap_file", None),
+                          triage=getattr(self.shell, "triage", None),
+                          dissection=getattr(self.shell, "dissection", None))
         runner = DagRunner(llm_client=llm)
         status_line: Dict[str, str] = {}
 
@@ -349,6 +351,13 @@ class InvestigateCommandHandler:
                         out[i] = prev + c + f"  {mark}" + RESET
                     except ValueError:
                         pass
+            elif event == "hypothesis_backtrack":
+                # Gap 3 — the DAG is retrying an inconclusive hypothesis with
+                # a narrowed-evidence prompt. Surface it so the analyst knows
+                # the "?" is being re-investigated, not dropped.
+                out.append(DIM +
+                           f"      ⟲ inconclusive (conf={payload['confidence']:.2f}) "
+                           f"— retrying with narrowed evidence..." + RESET)
 
         dag = runner.run(plan_items, ctx, on_event=emit)
 

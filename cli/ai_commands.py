@@ -29,6 +29,38 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+# Gap 6 — hallucination-caution threshold. Scores >= this (on the 0-1
+# hallucination scale) are surfaced to the analyst on stderr as a
+# caution line instead of being dropped into the log file only.
+_HALLUCINATION_CAUTION_THRESHOLD = 0.35
+
+
+def _hallucination_callback(result) -> None:
+    """on_result for the async hallucination detector.
+
+    Always logs; when the score clears the caution threshold the
+    warning is also written to stderr so the analyst sees it (stderr
+    bypasses the boxed-stdout answer renderer in cli/shell.py).
+    """
+    try:
+        score = float(getattr(result, "score", 0.0))
+        flagged = list(getattr(result, "flagged_claims", []) or [])
+        logger.info("hallucination detector: score=%.2f flagged=%s",
+                    score, flagged)
+        if score >= _HALLUCINATION_CAUTION_THRESHOLD:
+            try:
+                sys.stderr.write(
+                    f"[hallucination] LOW CONFIDENCE: score={score:.2f} "
+                    f"({len(flagged)} flagged claim(s) may be unsupported)\n")
+                for i, c in enumerate(flagged[:5], 1):
+                    sys.stderr.write(f"  {i}. {str(c)[:100]}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.debug("hallucination callback failed: %s", exc)
+
+
 _NO_OFFLINE_FALLBACK = os.environ.get("EASYSHARK_NO_OFFLINE_FALLBACK", "0") == "1"
 
 # Phase 10 §10.4 — stream the LLM answer token-by-token when available.
@@ -418,9 +450,10 @@ class AICommandHandler:
             logger.debug("grounding pass failed: %s", exc)
 
         # 7.3: kick off async hallucination detector (non-blocking).
-        # Uses a daemon thread so it never delays the analyst. Result is
-        # written to the log file, NOT stdout — surfacing raw confidence
-        # scores after the boxed answer pollutes the shell prompt.
+        # Uses a daemon thread so it never delays the analyst. The result
+        # is written to the log file AND, when the score clears the
+        # caution threshold, surfaced to stderr so the analyst sees the
+        # warning without it polluting the boxed stdout answer.
         try:
             from ai.hallucination_detector import run_async_score
             run_async_score(
@@ -429,10 +462,7 @@ class AICommandHandler:
                 packets=packets,
                 flows=flows,
                 shell=self.shell,
-                on_result=lambda r: logger.info(
-                    "hallucination detector: score=%.2f flagged=%s",
-                    r.score, r.flagged_claims,
-                ),
+                on_result=_hallucination_callback,
             )
         except MemoryError:
             pass  # OOM-safe: the detector is optional, never crash the shell
@@ -926,6 +956,16 @@ def _async_self_critique(llm_client, answer: str, claims_text: str) -> None:
         if revised and revised.strip():
             try:
                 logger.info("self-critique revision:\n%s", revised.strip())
+                # Gap 6 — surface the revision to the analyst on stderr so
+                # it is not silently dropped. The revision is a correction
+                # of the answer already on stdout, so it must not re-enter
+                # the boxed stdout stream.
+                try:
+                    sys.stderr.write(
+                        f"\n[s-self-critique revision]\n{revised.strip()}\n")
+                    sys.stderr.flush()
+                except Exception:
+                    pass
             except Exception:
                 pass
 

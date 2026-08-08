@@ -4,7 +4,9 @@ ai/hallucination_detector.py — Phase 7
 A small, second-pass audit of the LLM's final answer. Runs ASYNC so it
 never delays the analyst's interactive flow.
 
-The detector asks qwen2.5:7b one focused question:
+The detector makes one focused scoring call through the explainer role
+(the active backend's explainer model — Zen deepseek-v4-flash-free by
+default, previously qwen2.5:7b):
 
     "Given this answer and these extracted facts, which claims in the
     answer are NOT supported by the facts?"

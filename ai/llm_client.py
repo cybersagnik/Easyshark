@@ -67,6 +67,7 @@ from config.settings import (
     ZEN_MODELS,
     ZEN_TIMEOUT,
     ZEN_MAX_TOKENS,
+    ZEN_TEMPERATURE,
     ZEN_DAILY_SOFT_CAP,
     ZEN_DAILY_HARD_CAP,
     ZEN_MINUTE_SOFT_CAP,
@@ -1122,7 +1123,13 @@ class LLMClient:
         return GROQ_MODELS.get(model_type, GROQ_MODELS["planner"])
 
     def _default_temperature(self, model_type: str) -> float:
-        return OLLAMA_TEMPERATURE.get(model_type, 0.2)
+        # Gap 5 — backend-aware defaults. Zen is the primary transport now
+        # (replaces OpenRouter), so its per-role table wins when Zen is the
+        # first ready backend; otherwise fall back to the classic Ollama map.
+        # GROQ_TEMPERATURE (settings.py) is now dead config — removed.
+        backend = self._pick_backend(model_type)
+        table = ZEN_TEMPERATURE if backend == "zen" else OLLAMA_TEMPERATURE
+        return table.get(model_type, 0.2)
 
     def _system_prompt_for(self, model_type: str) -> str:
         return OLLAMA_SYSTEM_PROMPTS.get(model_type, OLLAMA_SYSTEM_PROMPTS["explainer"])
@@ -2075,6 +2082,16 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         # If there's an "Answer:" somewhere, keep only content from the
         # last "Answer:" onward.
         kept = None
+        # Phase 17 BUG — a JSON-object verdict (executor / critic output)
+        # is a valid final answer: do NOT run the plain-text-reasoning
+        # extraction against it. The short-line heuristic below would keep
+        # the last short line of a multi-line JSON object (its closing "}")
+        # and return a bare brace as the "answer", which the caller then
+        # fails to parse into a verdict. Detect an object/array root and
+        # return the JSON verbatim.
+        if cleaned.lstrip().startswith(("{", "[")):
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+            return cleaned.strip()
         if "Answer:" in cleaned:
             last_idx = cleaned.rindex("Answer:")
             tail = cleaned[last_idx:]

@@ -351,6 +351,10 @@ class InteractiveShell:
             self._handle_session_command(line)
             return
 
+        if low == "memory" or low.startswith("memory "):
+            self._handle_memory_command(line)
+            return
+
         if low in ("help", "?"):
             self._print_help()
             return
@@ -554,3 +558,141 @@ class InteractiveShell:
                 print("Current session cleared.")
         else:
             print(f"Failed to forget session {s.key}.")
+
+    # ------------------------------------------------------------------ #
+    # Gap 2 — `memory` commands: surface the self-learning stores that
+    # used to be write-only (failures.jsonl, patterns.jsonl, memory.db).
+    # ------------------------------------------------------------------ #
+    def _handle_memory_command(self, line: str) -> None:
+        parts = line.split(None, 1)
+        verb = (parts[1].strip() if len(parts) > 1 else "status").lower()
+        if verb in ("status", ""):
+            self._memory_status()
+        elif verb.startswith("show-failures") or verb == "failures":
+            self._memory_show_failures(parts[1].strip() if len(parts) > 1 else "")
+        elif verb.startswith("show-patterns") or verb == "patterns":
+            self._memory_show_patterns()
+        elif verb.startswith("show-verdicts") or verb == "verdicts":
+            self._memory_show_verdicts()
+        elif verb.startswith("show-iocs") or verb == "iocs":
+            self._memory_show_iocs()
+        else:
+            print("Usage:")
+            print("  memory status            — stores + sizes")
+            print("  memory show-failures     — recent heuristic/critic misses")
+            print("  memory show-patterns     — learned tool-usage patterns")
+            print("  memory show-verdicts     — recent critic-approved verdicts")
+            print("  memory show-iocs         — remembered IOC indicators")
+
+    def _memory_status(self) -> None:
+        print(section("Self-learning stores"))
+        from core.memory import db_path
+        import os as _os
+        shown = False
+        for name, path in (
+            ("memory.db", db_path()),
+            ("patterns.jsonl", None),
+            ("failures.jsonl", None),
+            ("distilled_prompts.jsonl", None),
+        ):
+            p = path or Path.home() / ".easyshark" / name
+            exists = p.exists()
+            size = p.stat().st_size if exists else 0
+            print(row(name, f"{size:,} B" if exists else "not created yet"))
+            shown = True
+        if not shown:
+            print("No learning stores found.")
+
+    def _memory_show_failures(self, arg: str) -> None:
+        try:
+            from ai.failure_library import read_failures
+            limit = 20
+            if arg:
+                try:
+                    limit = int(arg)
+                except ValueError:
+                    limit = 20
+            rows = read_failures(limit=limit)
+        except Exception as exc:
+            print(f"Error reading failures: {exc}")
+            return
+        if not rows:
+            print("No failures logged yet. Run `analyze` / `investigate` to build them up.")
+            return
+        print(section("Failures (heuristic misses / critic rejections)"))
+        for i, r in enumerate(rows, 1):
+            kind = r.get("kind") or r.get("type") or "?"
+            q = (r.get("question") or r.get("hypothesis") or "?")[:80]
+            ts = (r.get("ts") or "")[:19]
+            print(f"  {i:>2}. [{kind}] {q}")
+            if ts:
+                print(f"       {ts}")
+            issues = r.get("issues") or r.get("critic_issues")
+            if issues:
+                print(f"       issues: {'; '.join(str(x)[:60] for x in issues[:3])}")
+            tools = r.get("tools_used")
+            if tools:
+                print(f"       tools: {str(tools)[:80]}")
+
+    def _memory_show_patterns(self) -> None:
+        try:
+            from ai.pattern_learner import read_patterns
+            rows = read_patterns(limit=20)
+        except Exception as exc:
+            print(f"Error: {exc}")
+            return
+        if not rows:
+            print("No learned patterns yet. Run `investigate` to start learning.")
+            return
+        print(section("Learned tool-usage patterns"))
+        for i, r in enumerate(reversed(rows), 1):
+            rate = float(r.get("success_rate", 0.0))
+            n = int(r.get("sample_count", 0))
+            kws = ", ".join((r.get("question_keywords") or [])[:4]) or "?"
+            tools = ", ".join(str(t) for t in (r.get("tool_sequence") or [])[:4])
+            print(f"  {i:>2}. [{rate:.0%}×{n}] {kws}")
+            print(f"       tools: {tools}")
+
+    def _memory_show_verdicts(self) -> None:
+        try:
+            from core.memory import approved_verdicts
+            rows = approved_verdicts(n=15)
+        except Exception as exc:
+            print(f"Error: {exc}")
+            return
+        if not rows:
+            print("No critic-approved verdicts yet.")
+            return
+        print(section("Critic-approved verdicts"))
+        for r in rows:
+            v = (r.get("verdict") or "?").upper()
+            conf = float(r.get("confidence") or 0.0)
+            hyp = (r.get("hypothesis") or "?")[:70]
+            print(f"  [{v:<12}] conf={conf:.2f}  {hyp}")
+            tools = r.get("tools_used")
+            if tools:
+                print(f"        tools: {str(tools)[:80]}")
+
+    def _memory_show_iocs(self) -> None:
+        try:
+            from core.memory import _connect
+            conn = _connect()
+            try:
+                rows = conn.execute(
+                    "SELECT ip, domain, md5, verdict, source_pcap, last_seen "
+                    "FROM iocs ORDER BY id DESC LIMIT 25").fetchall()
+            finally:
+                conn.close()
+        except Exception as exc:
+            print(f"Error: {exc}")
+            return
+        if not rows:
+            print("No IOCs remembered yet.")
+            return
+        print(section("Remembered IOCs (prior-session knowledge)"))
+        for r in rows:
+            value = r["ip"] or r["domain"] or r["md5"]
+            v = (r["verdict"] or "?").upper()
+            src = (r["source_pcap"] or "?")[:30]
+            ts = (r["last_seen"] or "")[:16]
+            print(f"  {value:<28} [{v}] {src} {ts}")

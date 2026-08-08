@@ -128,10 +128,16 @@ OLLAMA_TEMPERATURE = {
     "coder":     0.1,      # strict output format
     "critic":    0.1,      # strict verification
 }
-GROQ_TEMPERATURE = {
+
+# Gap 5 — Zen (primary transport) per-role temperatures. The classic
+# GROQ_TEMPERATURE block was dead config (never referenced); replaced with
+# the backend that actually handles the traffic. Slightly more creative
+# than Ollama because Zen models are instruction-tuned for tool-calling.
+ZEN_TEMPERATURE = {
     "planner":   0.1,
     "explainer": 0.3,
     "coder":     0.2,
+    "critic":    0.1,
 }
 
 # Default temperature the public query() API uses when caller passes 0.7.

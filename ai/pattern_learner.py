@@ -123,7 +123,8 @@ def _keywords(text: str) -> List[str]:
 # --------------------------------------------------------------------------- #
 def update_patterns(question: str,
                     tools_used: List[str],
-                    success: float) -> None:
+                    success: float,
+                    confidence: Optional[float] = None) -> None:
     """Merge one datapoint into the pattern store.
 
     Args:
@@ -132,6 +133,9 @@ def update_patterns(question: str,
         success: 0.0-1.0 — how well the sequence performed (see
             _verdict_success). Only critic-approved verdicts should be
             passed here.
+        confidence: 0.0-1.0 — the executor verdict's numeric confidence
+            (Gap 4). Rolling mean is stored so suggest_tools can weight
+            hints by how certain the evidence was, not just success.
     """
     if not _ENABLED:
         return
@@ -158,6 +162,7 @@ def update_patterns(question: str,
                     "tool_sequence": tools,
                     "success_rate": success,
                     "sample_count": 1,
+                    "mean_confidence": round(confidence or success, 4),
                 })
             else:
                 n = int(best.get("sample_count", 1))
@@ -165,6 +170,11 @@ def update_patterns(question: str,
                 best["success_rate"] = round(
                     (rate * n + success) / (n + 1), 4)
                 best["sample_count"] = n + 1
+                # Gap 4 — rolling mean of the numeric verdict confidence.
+                prev_conf = float(best.get("mean_confidence", rate))
+                best["mean_confidence"] = round(
+                    (prev_conf * n + (confidence if confidence is not None else success))
+                    / (n + 1), 4)
                 # Grow the keyword set with new family terms.
                 merged = list(dict.fromkeys(
                     list(best.get("question_keywords") or []) + kws))[:20]
@@ -216,6 +226,7 @@ def learn_from_verdicts(n: int = 50,
             question=v.get("hypothesis") or "",
             tools_used=tools,
             success=success,
+            confidence=float(v.get("confidence") or 0.0),
         )
         merged += 1
     return merged
@@ -251,7 +262,11 @@ def suggest_tools(question: str) -> Optional[List[str]]:
         if rate < SUGGEST_CONFIDENCE or n < SUGGEST_MIN_SAMPLES:
             continue
         tools = row.get("tool_sequence") or []
-        scored.append((overlap * rate, n, tools))
+        # Gap 4 — weight by the rolling mean of the numeric verdict
+        # confidence so high-certainty evidence outranks barely-confident
+        # successes when both clear the success-rate gate.
+        conf = float(row.get("mean_confidence", rate))
+        scored.append((overlap * rate * conf, n, tools))
     if not scored:
         return None
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)

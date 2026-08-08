@@ -324,6 +324,17 @@ class HypothesisPlanner:
             f"Capture summary (abridged):\n{narrative_excerpt}\n\n"
             "Produce the hypothesis plan as a JSON array."
         )
+        # Gap 1 fix — the distilled-pattern store is only read back here.
+        # Inject up to 3 learned few-shot patterns so prior approved
+        # investigations steer the plan (never the deciding factor, just
+        # a hint the model can override).
+        try:
+            from ai.prompt_distiller import top_few_shot
+            few = top_few_shot(limit=3, max_tokens=300)
+            if few:
+                user += "\n\n" + few
+        except Exception as exc:
+            logger.debug("top_few_shot injection failed: %s", exc)
         from ai.investigator import _single_completion, _extract_json_array
         raw = _single_completion(
             self.llm, HYPOTHESIS_PLAN_SYSTEM_PROMPT, user,

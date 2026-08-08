@@ -170,6 +170,9 @@ class DAGHypothesis:
     critic_approved: Optional[bool] = None
     critic_issues: List[str] = field(default_factory=list)
     retries: int = 0
+    # Gap 3 (Phase 11 §11.4) — true backtracking: set when an inconclusive
+    # verdict has already been retried once with a narrowed-evidence prompt.
+    backtracked: bool = False
 
     def short_label(self) -> str:
         return f"{self.id}: {self.hypothesis[:48]}"
@@ -362,6 +365,49 @@ class DagRunner:
                         break  # nothing actionable from the critic
 
                 self._finalize(hyp, verdict)
+
+                # Gap 3 (Phase 11 §11.4) — backtrack on INCONCLUSIVE.
+                # An inconclusive verdict (confidence < 0.4) that was never
+                # retried gets ONE more executor pass with a narrowed-evidence
+                # prompt, so weak evidence gets a second, better-scoped attempt
+                # instead of surfacing as "?". Dependents are never blocked
+                # (waves are topologically ordered up front), so this is purely
+                # a verdict-quality retry. Max one backtrack per hypothesis.
+                if (hyp.verdict == "inconclusive"
+                        and not hyp.backtracked
+                        and hyp.retries == 0
+                        and verdict is not None):
+                    hyp.backtracked = True
+                    if on_event:
+                        on_event("hypothesis_backtrack", {
+                            "id": hyp.id, "name": hyp.hypothesis,
+                            "confidence": hyp.confidence,
+                        })
+                    backtrack_feedback = (
+                        "Your previous verdict was inconclusive — the evidence "
+                        "was too weak (confidence < 0.4). Narrow the search: run "
+                        "2-3 targeted tool calls for THIS hypothesis (use "
+                        "list_flows / apply_display_filter on the specific "
+                        "src/dst pair, then the most specific extractor). Either "
+                        "find corroborating evidence or explicitly rule the "
+                        "hypothesis out. A verdict of ruled_out is valid when "
+                        "the tools return nothing relevant."
+                    )
+                    text, transcript = self._run_executor(
+                        hyp, ctx, backtrack_feedback, prior_notes)
+                    executor_calls += 1
+                    hyp.retries += 1
+                    hyp.tools_used = [t.get("tool", "?") for t in transcript]
+                    if on_event and transcript:
+                        on_event("tools_used", {
+                            "id": hyp.id, "tools": hyp.tools_used,
+                        })
+                    verdict2 = _parse_verdict(text)
+                    if verdict2 is not None:
+                        # The retry is accepted without a 2nd critic pass
+                        # (mirrors the critic-rejection retry path above).
+                        self._finalize(hyp, verdict2)
+
                 # Phase 10 §10.2 — persist critic-approved verdicts + their
                 # IOCs so a future session over this/related captures can
                 # recall them.

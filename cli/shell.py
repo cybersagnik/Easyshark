@@ -89,13 +89,13 @@ class InteractiveShell:
         self.session = session
         self.session_manager = session_manager
         self._session_restored = False
+        self._load_log: List[str] = []
 
-        sys.stdout.write(DIM + f"Loading: {pcap_file} ... " + RESET)
-        sys.stdout.flush()
         self.loader = PCAPLoader(pcap_file)
         self.packets_raw = self.loader.load()
-        sys.stdout.write(DIM + f"done. {len(self.packets_raw)} packets.\n" + RESET)
-        sys.stdout.flush()
+        self._load_log.append(
+            f"Loading: {pcap_file} ... done. {len(self.packets_raw)} packets."
+        )
 
         self.index = PacketIndex()
         self.flow_engine = FlowEngine()
@@ -111,21 +111,33 @@ class InteractiveShell:
         self.ai_handler = AICommandHandler(self, None) if enable_ai else None
         self.capture_handler = CaptureCommandHandler(self)
         self.info_handler = InfoCommandHandler(self)
+        from .report_commands import ReportCommandHandler
+        self.report_handler = ReportCommandHandler(self)
         self.capture_session = None
+        self.last_iocs: List[str] = []
         self.formatter = OutputFormatter()
 
-        from core.triage import triage_capabilities, render_capabilities
+        from core.triage import triage_capabilities
         self.triage = triage_capabilities(self.index.packets)
 
         from core.dissector import dissect_packets
         self.dissection = dissect_packets(self.index.packets)
         self.dissector_skips = self.dissection.get("skipped", 0)
 
-        sys.stdout.write(DIM + f"Indexed {len(self.index.packets)} packets.\n" + RESET)
-        sys.stdout.flush()
+        self._load_log.append(f"Indexed {len(self.index.packets)} packets.")
 
         self._restore_session_state()
         self._sync_session_triage()
+
+    def flush_load_log(self) -> None:
+        """L12 — print the buffered load-log lines (called after the banner
+        renders, so the banner appears first)."""
+        if not self._load_log:
+            return
+        for line in self._load_log:
+            sys.stdout.write(DIM + line + "\n" + RESET)
+        sys.stdout.flush()
+        self._load_log = []
 
     def _sync_session_triage(self) -> None:
         s = getattr(self, "session", None)
@@ -235,6 +247,7 @@ class InteractiveShell:
         return list(self.index.packets)
 
     def run(self):
+        self.flush_load_log()
         print(DIM + "Type 'help' for commands, 'exit' to quit." + RESET)
         print()
         while True:
@@ -318,9 +331,6 @@ class InteractiveShell:
             handler = InvestigateCommandHandler(self)
             out = handler.handle(line)
             if out is not None:
-                # Wrap the final incident report in a box
-                lines = out.split("\n")
-                # Find and box the conclusion section
                 print(out)
             return
 
@@ -337,6 +347,15 @@ class InteractiveShell:
                     rest = rest[len(k):].strip()
                     break
             self.ai_handler.generate_rule(rest, kind=kind)
+            return
+
+        if low == "report" or low.startswith("report ") or \
+                low in ("anomalies", "timeline") or \
+                low.startswith(("anomalies ", "timeline ")) or \
+                low == "analyze-auto" or low.startswith("analyze-auto "):
+            out = self.report_handler.handle(line)
+            if out is not None:
+                print(out)
             return
 
         info_verbs = ("protocols", "ips", "flows", "dns", "creds",
@@ -386,6 +405,28 @@ class InteractiveShell:
         # Filter empty answer lines
         answer_lines = [l for l in answer_lines if l.strip()]
 
+        # Premise-mismatch refusal: render as a yellow ⚠ warning OUTSIDE the
+        # "Answer" box so a refusal is never mistaken for a genuine finding.
+        if any(l.strip() == "[REFUSAL-START]" for l in answer_lines):
+            try:
+                start = next(i for i, l in enumerate(answer_lines)
+                             if l.strip() == "[REFUSAL-START]")
+                end = next(i for i, l in enumerate(answer_lines)
+                           if l.strip() == "[REFUSAL-END]")
+            except StopIteration:
+                start, end = 0, len(answer_lines)
+            refusal_body = [l for l in answer_lines[start + 1:end]
+                            if l.strip()]
+            print()
+            print(YELLOW + "⚠ Refused — question premise does not match the capture" + RESET)
+            for rl in refusal_body:
+                print(YELLOW + rl + RESET)
+            print()
+            for ml in meta_lines:
+                if ml.strip():
+                    print(DIM + ml + RESET)
+            return
+
         if answer_lines:
             print()
             print(_box("Answer", answer_lines))
@@ -405,15 +446,44 @@ class InteractiveShell:
             else:
                 if ml.strip():
                     print(DIM + ml + RESET)
+        self._print_degradation_notes()
+
+    def _print_degradation_notes(self) -> None:
+        """M8 — surface provider-degradation notes (Zen SSL, OpenRouter cap,
+        fallbacks) on stdout so a backend change is visible, not just logged."""
+        llm = getattr(self, "llm_client", None)
+        if llm is None or not hasattr(llm, "drain_degradation_notes"):
+            return
+        try:
+            notes = llm.drain_degradation_notes()
+        except Exception:
+            return
+        if not notes:
+            return
+        for note in notes:
+            print(YELLOW + "⚠ " + note + RESET)
 
     def _print_help(self):
         commands = [
             ("analyze <question>", "Ask a forensic question"),
+            ("/ <question>", "AI shortcut for ask-the-AI"),
+            ("report [--json] [--force]", "Incident report (detectors + LLM)"),
+            ("anomalies", "Ranked anomaly list (no LLM, <2s)"),
+            ("timeline", "Behavioral timeline (no LLM, <2s)"),
             ("investigate <q>", "Multi-hypothesis investigation"),
+            ("rule snort|yara|python <desc>", "Generate detection rule"),
+            ("list", "List all packets"),
+            ("show <idx>", "One-line packet summary"),
+            ("stats", "Traffic counters"),
+            ("alerts [idx]", "Triggered detection alerts"),
+            ("flows", "Conversations + top flows"),
+            ("filter <expr>", "Wireshark-style display filter"),
+            ("search <regex>", "Regex search over TCP/UDP payloads"),
+            ("dissect <idx>", "Full breakdown of one packet"),
+            ("hex <idx>", "Hex+ASCII dump of one packet payload"),
+            ("follow tcp|udp <id>", "Reassembled stream for a flow"),
             ("protocols", "Protocol breakdown table"),
             ("ips", "Host summary table"),
-            ("flows", "Top flows table"),
-            ("files", "Extracted files list"),
             ("dns", "DNS queries and anomalies"),
             ("creds", "Extracted credentials"),
             ("summary", "Capture overview (0 LLM calls)"),
@@ -421,14 +491,18 @@ class InteractiveShell:
             ("capture interfaces", "List capture interfaces"),
             ("capture start <iface>", "Start live capture"),
             ("capture stop", "Stop and reload capture"),
+            ("capture status", "Active capture status"),
             ("sessions", "List saved sessions"),
             ("session info", "Current session details"),
             ("session forget", "Delete current session"),
+            ("memory", "Self-learning memory"),
+            ("help / ?", "This message"),
             ("exit / quit", "Exit EasyShark"),
         ]
         lines = []
         for cmd, desc in commands:
             lines.append(BRIGHT_CYAN + cmd + RESET + "  " + WHITE + desc + RESET)
+        print()
         print(_box("Commands", lines))
 
     def _record_session_turn(self, question: str, answer: str) -> None:
@@ -482,11 +556,19 @@ class InteractiveShell:
         if not sessions:
             print("No saved sessions.")
             return
-        print(header("KEY", "LAST ACTIVE", "PCAP"))
+        headers = ("KEY", "LAST ACTIVE", "PCAP")
+        data = []
         for s in sessions:
             mark = " *" if (getattr(self, "session", None) is not None
                             and s.key == self.session.key) else ""
-            print(row(f"  {s.key}", s.last_active, s.pcap_path + mark))
+            data.append((f"  {s.key}", s.last_active, s.pcap_path + mark))
+        widths = [len(h) for h in headers]
+        for d in data:
+            for i, cell in enumerate(d):
+                widths[i] = max(widths[i], len(cell))
+        print(header(*headers))
+        for d in data:
+            print(row(*d, widths=widths))
         print("\n  * = current session   |   resume: python3 main.py --session <key>")
 
     def _session_info(self, key: str) -> None:
@@ -508,19 +590,25 @@ class InteractiveShell:
         pairs = sm.recent_pairs(s, 3)
         c = CYAN
         r = RESET
+        info_rows = [
+            ("Created", s.created_at),
+            ("Last active", s.last_active),
+            ("PCAP", s.pcap_path),
+            ("PCAP hash", s.pcap_hash),
+            ("Turns", str(len(s.conversation) // 2)),
+            ("Triage cache", "yes" if s.triage_cache else "no"),
+        ]
         print(section("Session " + s.key))
-        print(row("Created", s.created_at))
-        print(row("Last active", s.last_active))
-        print(row("PCAP", s.pcap_path))
-        print(row("PCAP hash", s.pcap_hash))
-        print(row("Turns", str(len(s.conversation) // 2)))
-        print(row("Triage cache", "yes" if s.triage_cache else "no"))
+        label_w = max(len(a) for a, _ in info_rows)
+        for label, val in info_rows:
+            print(row(label, val, widths=(label_w, len(val))))
         pc = s.provider_counts or {}
         if pc:
             print(section("Provider call counts"))
             for role in ("planner", "explainer", "coder", "critic"):
                 if role in pc:
-                    print(row(role, str(pc[role])))
+                    print(row(role, str(pc[role]),
+                              widths=(label_w, len(str(pc[role])))))
         if pairs:
             print(section("Last conversation"))
             for q, a in pairs:
@@ -541,7 +629,8 @@ class InteractiveShell:
         if s is None:
             print(f"No session found for {target!r}.")
             return
-        if s.key == getattr(self, "session", None) and s.key == self.session.key:
+        cur = getattr(self, "session", None)
+        if cur is not None and s.key == cur.key:
             print(YELLOW + f"⚠ Warning: {s.key} is the CURRENT session." + RESET)
         try:
             answer = input(f"Forget session {s.key} ({s.pcap_path})? [y/N] ").strip()

@@ -460,6 +460,13 @@ class LLMClient:
         self._zen_ssl_failures: int = 0
         self.zen_ssl_degraded: bool = False
 
+        # M8 — provider-degradation notes surfaced on stdout. Every event
+        # that changes provider quality/trust for the session (Zen SSL
+        # degrade, OpenRouter daily cap, provider exhaustion) appends a
+        # short human-readable note here; the shell drains and prints them
+        # after each AI answer so the analyst sees the backend change.
+        self.degradation_notes: List[str] = []
+
         # Phase 14 TASK 3 — per-provider call tracking. Ollama is absent
         # from the active chain (not supported on this machine).
         self.groq_calls_today: int = 0
@@ -533,6 +540,26 @@ class LLMClient:
             pass
 
     # ------------------------------------------------------------------ #
+    # M8 — provider-degradation notes (stdout surfacing)                 #
+    # ------------------------------------------------------------------ #
+    def note_degradation(self, message: str) -> None:
+        """Append a provider-degradation note (deduped) for stdout surfacing."""
+        if not message:
+            return
+        notes = getattr(self, "degradation_notes", None)
+        if notes is None:
+            notes = []
+            self.degradation_notes = notes
+        if not notes or notes[-1] != message:
+            notes.append(message)
+
+    def drain_degradation_notes(self) -> List[str]:
+        """Return and clear the pending degradation notes."""
+        notes = list(getattr(self, "degradation_notes", None) or [])
+        self.degradation_notes = []
+        return notes
+
+    # ------------------------------------------------------------------ #
     # Backend introspection                                              #
     # ------------------------------------------------------------------ #
     def backend(self) -> str:
@@ -585,6 +612,10 @@ class LLMClient:
                 "OpenRouter session cap reached (%d calls) — falling through "
                 "to Ollama for the rest of this session.",
                 calls_today,
+            )
+            self.note_degradation(
+                f"OpenRouter session cap reached ({calls_today} calls) — "
+                "answers now served by the fallback backend."
             )
             return False
         if (calls_today >= OPENROUTER_DAILY_SOFT_CAP
@@ -715,8 +746,16 @@ class LLMClient:
                                    resp.status_code, detail)
                     if resp.status_code == 429:
                         self._mark_exhausted("openrouter", model_type)
+                        self.note_degradation(
+                            f"OpenRouter rate-limited (HTTP 429) for "
+                            f"{model_type} — falling back to next backend."
+                        )
                     elif resp.status_code in (401, 402, 403):
                         self._openrouter_reachable_cache = False
+                        self.note_degradation(
+                            f"OpenRouter rejected (HTTP {resp.status_code}) — "
+                            "falling back to next backend."
+                        )
                     return None
                 try:
                     payload = resp.json()
@@ -741,8 +780,16 @@ class LLMClient:
                 # Per-role exhaustion — this role loses OpenRouter; the
                 # other roles may still try it.
                 self._mark_exhausted("openrouter", model_type)
+                self.note_degradation(
+                    f"OpenRouter rate-limited (HTTP 429) for {model_type} — "
+                    "falling back to next backend."
+                )
             elif exc.code in (401, 402, 403):
                 self._openrouter_reachable_cache = False
+                self.note_degradation(
+                    f"OpenRouter rejected (HTTP {exc.code}) — falling back "
+                    "to next backend."
+                )
             return None
         except Exception as exc:
             logger.warning("OpenRouter request failed: %s", exc)
@@ -901,6 +948,10 @@ class LLMClient:
                     "Zen SSL degraded after %d failures — skipping Zen for "
                     "the rest of the session.", self._zen_ssl_failures,
                 )
+                self.note_degradation(
+                    "Zen degraded (repeated TLS errors) — switched to "
+                    "fallback backend for the rest of this session."
+                )
             logger.warning("Zen SSL error (attempt %d/%d): %s",
                            attempt + 1, ZEN_SSL_MAX_RETRIES + 1, exc_info)
             return attempt < ZEN_SSL_MAX_RETRIES
@@ -918,6 +969,10 @@ class LLMClient:
                 logger.warning("Zen HTTP %s — %s", exc.code, detail)
                 if exc.code in (401, 402, 403, 429):
                     self._zen_reachable_cache = False
+                    self.note_degradation(
+                        f"Zen rejected (HTTP {exc.code}) — falling back to "
+                        "next backend."
+                    )
                 return None
             except _urlerr.URLError as exc:
                 # urllib wraps socket-level SSL failures in URLError with
@@ -1546,6 +1601,16 @@ class LLMClient:
                     "llm",
                     f"{model_type} · {backend} failed → trying next backend",
                 )
+                noted = getattr(self, "_fallback_notes", None)
+                if noted is None:
+                    noted = set()
+                    self._fallback_notes = noted
+                if backend not in noted:
+                    noted.add(backend)
+                    self.note_degradation(
+                        f"{backend} failed for {model_type} — answer served "
+                        "by the next backend in the chain."
+                    )
         logger.error("No LLM backend available (model_type=%s)", model_type)
         return None
 

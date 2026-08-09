@@ -237,10 +237,11 @@ class AICommandHandler:
         triage = getattr(self.shell, "triage", None)
         refusal = _check_premise(query, triage)
         if refusal:
-            print(f"\nAnalyzing: {query}")
             print("[premise mismatch — refused]")
+            print("[REFUSAL-START]")
             print()
             print(refusal)
+            print("[REFUSAL-END]")
             print(f"\n[backend: deterministic]")
             self._record_session_turn(query, refusal)
             return
@@ -308,8 +309,6 @@ class AICommandHandler:
                 tail = directive.strip().split(None, 1)
                 if len(tail) == 2 and tail[0].lower() == "analyze":
                     query = tail[1]
-
-        print(f"\nAnalyzing: {query}")
 
         # ---- Live activity status on stderr (cli/status.py) ----------- #
         # Bypasses the shell's stdout redirect; shows provider, tool-loop
@@ -563,7 +562,6 @@ class AICommandHandler:
     def _offline_summarize(self, query, packets, flows, alerts):
         """No LLM available: produce a deterministic offline summary that
         includes the same key facts the evidence runners expect."""
-        print(f"\nAnalyzing: {query}")
         print("[offline summary — LLM unavailable]\n")
         from ai.payload_analyzer import (
             summarize_payloads, parse_smtp_attachments,

@@ -25,10 +25,58 @@ def header(*cols: str) -> str:
     return BOLD + BRIGHT_CYAN + sep.join(cols) + RESET
 
 
-def row(*cols: str) -> str:
-    """Table data row: columns separated by │."""
+def row(*cols: str, widths: Optional[List[int]] = None) -> str:
+    """Table data row: columns separated by │.
+
+    When ``widths`` is given the cells are padded to those widths so rows
+    line up with the header (L20 — `session info`/`sessions` tables).
+    """
     sep = CYAN + " │ " + RESET
+    if widths is not None:
+        padded = []
+        for cell, width in zip(cols, widths):
+            visible = len(str(cell))
+            padded.append(str(cell) + " " * max(0, width - visible))
+        return WHITE + sep.join(padded) + RESET
     return WHITE + sep.join(cols) + RESET
+
+
+def _align(cells, widths) -> str:
+    """Join cells into one row, padded to widths and separated by │,
+    matching the header style (L15 — rows use the same separators as the
+    header so the table reads as a grid)."""
+    sep = CYAN + " │ " + RESET
+    padded = []
+    for cell, width in zip(cells, widths):
+        visible = len(str(cell))
+        padded.append(str(cell) + " " * max(0, width - visible))
+    return sep.join(padded)
+
+
+def _table(headers: List[str], data, max_rows: int = 20,
+           cap_label: str = "…") -> str:
+    """Render an aligned table (header + rows) with │ separators.
+
+    - Column widths are computed from the header and all rows so every
+      column lines up.
+    - Rows beyond `max_rows` are dropped and a cap note appended
+      (L15 — `ips`/`creds` rows were unbounded).
+    """
+    rows = list(data)
+    truncated = len(rows) > max_rows
+    rows = rows[:max_rows]
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, cell in enumerate(r):
+            widths[i] = max(widths[i], len(str(cell)))
+    lines = [header(*headers)]
+    for i, r in enumerate(rows):
+        c = WHITE if i % 2 == 0 else DIM
+        lines.append(c + "  " + _align(r, widths) + RESET)
+    if truncated:
+        lines.append(DIM + f"  {cap_label} {len(rows)}+ more rows "
+                            f"(use a capture filter to narrow)" + RESET)
+    return "\n".join(lines)
 
 
 def section(title: str) -> str:
@@ -101,15 +149,14 @@ class InfoCommandHandler:
             details["IRC"] = f"{len(d.get('irc', {}).get('messages_preview', []))} messages"
 
         lines = [section(f"Protocols — {self.shell.pcap_file}"), ""]
-        lines.append(header("Protocol", "Packets", "Detail"))
-        for i, proto in enumerate(active):
+        data = []
+        for proto in active:
             n = counts[proto]
             det = details.get(proto, "")
-            c = WHITE if i % 2 == 0 else DIM
-            lines.append(c + f"  {proto:<10} {n:>6}      {det}" + RESET)
-        for i, proto in enumerate(sorted(set(counts) - set(active))):
-            c = WHITE if (len(active) + i) % 2 == 0 else DIM
-            lines.append(c + f"  {proto:<10} {counts[proto]:>6}" + RESET)
+            data.append((proto, str(n), det))
+        for proto in sorted(set(counts) - set(active)):
+            data.append((proto, str(counts[proto]), ""))
+        lines.append(_table(("Protocol", "Packets", "Detail"), data, max_rows=30))
         return "\n".join(lines)
 
     def cmd_ips(self, arg: str) -> str:
@@ -120,12 +167,11 @@ class InfoCommandHandler:
         rows = sorted(summary.items(),
                       key=lambda kv: -(kv[1].get("sent", 0) + kv[1].get("recv", 0)))
         lines = [section(f"IP Summary — {self.shell.pcap_file}"), ""]
-        lines.append(header("IP", "Sent", "Recv", "Protocols"))
-        for i, (ip, info) in enumerate(rows):
-            c = WHITE if i % 2 == 0 else DIM
-            lines.append(
-                c + f"  {ip:<18} {info.get('sent', 0):>9} {info.get('recv', 0):>9} "
-                f"{', '.join(info.get('protocols', []))[:20]}" + RESET)
+        data = [(ip, str(info.get("sent", 0)), str(info.get("recv", 0)),
+                 ", ".join(info.get("protocols", []))[:20])
+                for ip, info in rows]
+        lines.append(_table(("IP", "Sent", "Recv", "Protocols"), data,
+                            max_rows=20))
         return "\n".join(lines)
 
     def cmd_flows(self, arg: str) -> str:
@@ -136,12 +182,10 @@ class InfoCommandHandler:
         lines = [section(f"Flows — {self.shell.pcap_file}"), ""]
         lines.append(f"  Conversations: {conv} | Engine flows: {len(flows)}")
         lines.append("")
-        lines.append(header("Source", "Destination", "Proto", "Packets"))
-        for i, f in enumerate(rows):
-            c = WHITE if i % 2 == 0 else DIM
-            lines.append(
-                c + f"  {f.src_ip}:{f.src_port:<15} {f.dst_ip}:{f.dst_port:<15} "
-                f"{f.protocol:<6} {getattr(f, 'packet_count', '?'):>6}" + RESET)
+        data = [(f"{f.src_ip}:{f.src_port}", f"{f.dst_ip}:{f.dst_port}",
+                 f.protocol, str(getattr(f, "packet_count", "?")))
+                for f in rows]
+        lines.append(_table(("Source", "Destination", "Proto", "Packets"), data))
         return "\n".join(lines)
 
     def cmd_dns(self, arg: str) -> str:
@@ -153,18 +197,17 @@ class InfoCommandHandler:
         lines.append(f"  Queries: {len(queries)} | Responses: {len(d.get('responses', []))} | "
                      f"NXDOMAIN: {len(d.get('nx_domains', []))}")
         lines.append("")
-        lines.append(header("Count", "Domain"))
+        from core.sanitise import sanitise
         top = Counter()
         for q in queries:
             top[q["name"]] += 1
-        for i, (name, n) in enumerate(top.most_common(15)):
-            c = WHITE if i % 2 == 0 else DIM
-            lines.append(c + f"  {n:>5}x  {name}" + RESET)
+        data = [(f"{n}x", sanitise(name)) for name, n in top.most_common(15)]
+        lines.append(_table(("Count", "Domain"), data, max_rows=15))
         if d.get("suspicious_long_labels"):
             lines.append("")
             lines.append(DIM + "  Suspicious long labels (possible tunneling):" + RESET)
             for name in d["suspicious_long_labels"][:10]:
-                lines.append(DIM + f"    {name}" + RESET)
+                lines.append(DIM + f"    {sanitise(name)}" + RESET)
         return "\n".join(lines)
 
     def cmd_creds(self, arg: str) -> str:
@@ -186,13 +229,15 @@ class InfoCommandHandler:
         if not creds:
             return "(no credentials found)"
         lines = [section(f"Credentials — {self.shell.pcap_file}"), ""]
-        lines.append(header("Protocol", "Username", "Password"))
-        for i, c in enumerate(creds):
-            pw = c.get("password") or "(none)"
+        from core.sanitise import sanitise
+        data = []
+        for c in creds:
             proto = c.get("protocol", "?")
-            user = c.get("username", "?")
-            col = WHITE if i % 2 == 0 else DIM
-            lines.append(col + f"  {proto:<10} {user:<25} {pw}" + RESET)
+            user = sanitise(c.get("username", "?"))
+            pw = sanitise(c.get("password") or "(none)")
+            data.append((proto, user, pw))
+        lines.append(_table(("Protocol", "Username", "Password"), data,
+                            max_rows=20))
         return "\n".join(lines)
 
     def cmd_summary(self, arg: str) -> str:
@@ -234,9 +279,7 @@ class InfoCommandHandler:
             ("ARP requests", str(len(d.get('arp', {}).get('requests', [])))),
             ("Detected", on or "(none)"),
         ]
-        for i, (label, val) in enumerate(items):
-            c = WHITE if i % 2 == 0 else DIM
-            lines.append(c + f"  {label:<18} {val}" + RESET)
+        lines.append(_table(("Field", "Value"), items, max_rows=30))
         return "\n".join(lines)
 
     def cmd_extract(self, arg: str) -> str:
@@ -247,14 +290,28 @@ class InfoCommandHandler:
         out_dir = Path.home() / ".easyshark" / "extracted"
         out_dir.mkdir(parents=True, exist_ok=True)
         saved = []
+        seen_names = set()
         for entry in entries:
             data = entry.get("data", b"")
             if not data:
                 continue
-            fname = entry["filename"]
-            target = out_dir / fname
+            raw = entry["filename"]
+            name = Path(raw).name
+            if not name or name in (".", "..") or "/" in name or "\\" in name:
+                name = f"sanitised_{len(saved):03d}"
+            base = name
+            n = 1
+            while name in seen_names or (out_dir / name).exists():
+                stem, dot, ext = base.rpartition(".")
+                if dot and len(ext) <= 8:
+                    name = f"{stem}_{n}{dot}{ext}"
+                else:
+                    name = f"{base}_{n}"
+                n += 1
+            seen_names.add(name)
+            target = out_dir / name
             target.write_bytes(data)
-            saved.append(f"  {fname}  ({len(data)} bytes, md5={entry['md5']})")
+            saved.append(f"  {name}  ({len(data)} bytes, md5={entry['md5']})")
         if not saved:
             return "(no file blobs recovered)"
         return (f"Extracted {len(saved)} file(s) to {out_dir}:\n"

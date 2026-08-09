@@ -12,23 +12,79 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 import textwrap
 from pathlib import Path
 
 
-# ANSI colour constants (TUI redesign)
-RESET   = "\033[0m"
-BOLD    = "\033[1m"
-DIM     = "\033[2m"
-CYAN    = "\033[36m"
-BRIGHT_CYAN  = "\033[96m"
-GREEN   = "\033[32m"
-BRIGHT_GREEN = "\033[92m"
-YELLOW  = "\033[33m"
-WHITE   = "\033[97m"
-BORDER  = "\033[36m"  # cyan for box borders
+def _colors_enabled() -> bool:
+    """M10 — colour gating. Colours are disabled when NO_COLOR is set
+    (any value, per no-color.org) or when stdout is not a TTY (piped /
+    scripted output must not be polluted with ANSI escapes)."""
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _ensure_utf8_stdio() -> None:
+    """M11 — enforce UTF-8 on stdout/stderr so box/table Unicode never
+    crashes on a non-UTF-8 locale. Uses errors='replace' so any byte that
+    still cannot be encoded degrades to '?' instead of raising."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def _unicode_glyphs() -> bool:
+    """L16 — verdict/spinner glyph fallback. Unicode marks (✓/✗/⠋…) are
+    rendered only on an interactive TTY; piped/scripted output (and any
+    run with EASYSHARK_ASCII=1) uses ASCII-safe alternatives so
+    missing-font terminals never show boxes."""
+    if os.environ.get("EASYSHARK_ASCII") is not None:
+        return False
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+UNICODE_GLYPHS = _unicode_glyphs()
+
+
+# ANSI colour constants (TUI redesign). Gated once at import time so every
+# `from main import RESET, ...` importer inherits the NO_COLOR/isatty policy.
+if _colors_enabled():
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    DIM     = "\033[2m"
+    CYAN    = "\033[36m"
+    BRIGHT_CYAN  = "\033[96m"
+    GREEN   = "\033[32m"
+    BRIGHT_GREEN = "\033[92m"
+    YELLOW  = "\033[33m"
+    WHITE   = "\033[97m"
+    BORDER  = "\033[36m"  # cyan for box borders
+else:
+    RESET   = ""
+    BOLD    = ""
+    DIM     = ""
+    CYAN    = ""
+    BRIGHT_CYAN  = ""
+    GREEN   = ""
+    BRIGHT_GREEN = ""
+    YELLOW  = ""
+    WHITE   = ""
+    BORDER  = ""
 
 
 def _shark_art() -> str:
@@ -63,6 +119,7 @@ def _shark_art() -> str:
 
 
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+_ANSI_TOKEN_RE = re.compile(r"(\033\[[0-9;]*m)")
 
 
 def _visible_len(text: str) -> int:
@@ -70,11 +127,73 @@ def _visible_len(text: str) -> int:
     return len(_ANSI_RE.sub("", text))
 
 
+def _display_width(text: str) -> int:
+    """Return the terminal display width of text, excluding ANSI escapes.
+
+    East Asian wide/fullwidth (W/F) characters count as 2 columns.
+    Ambiguous-width chars (box-drawing, `█`) are counted as 1 so the
+    fixed-width box borders stay aligned on the common 1x terminals;
+    the wordmark itself is kept short enough to fit the box even on
+    2x-rendering terminals (L14).
+    """
+    import unicodedata
+
+    width = 0
+    for ch in _ANSI_RE.sub("", text):
+        if unicodedata.east_asian_width(ch) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
 def _ljust_visible(text: str, width: int) -> str:
-    """Left-justify text to width, accounting for ANSI escape codes."""
-    visible = _visible_len(text)
+    """Left-justify text to display width, accounting for ANSI escapes."""
+    visible = _display_width(text)
     pad = max(0, width - visible)
     return text + " " * pad
+
+
+def _wrap_visible(text: str, width: int):
+    """Word-wrap text to `width` visible columns, preserving ANSI colour
+    codes (L13). Continuation lines reopen the colour code active at the
+    wrapped word, so a boxed body never renders uncoloured text.
+
+    Falls back to textwrap (word-boundary wrap) for ANSI-free input so
+    existing boxed bodies are byte-for-byte unchanged.
+    """
+    if "\033" not in text:
+        return textwrap.wrap(text, width=width)
+    tokens = _ANSI_TOKEN_RE.split(text)
+    lines = []
+    cur = ""
+    cur_visible = 0
+    last_colour = ""
+    for tok in tokens:
+        if not tok:
+            continue
+        if _ANSI_TOKEN_RE.fullmatch(tok):
+            cur += tok
+            last_colour = tok
+            continue
+        for word in tok.split(" "):
+            word_visible = _visible_len(word)
+            if word_visible > width:
+                if cur_visible > 0:
+                    lines.append(cur)
+                    cur = ""
+                    cur_visible = 0
+                lines.append(word)
+                continue
+            if cur_visible > 0 and cur_visible + word_visible > width:
+                lines.append(cur)
+                cur = last_colour
+                cur_visible = 0
+            cur += word + (" " if cur_visible > 0 else "")
+            cur_visible += word_visible + (1 if cur_visible > 0 else 0)
+    if cur_visible > 0:
+        lines.append(cur)
+    return lines
 
 
 def _box(title: str, body_lines, width: int = 62) -> str:
@@ -82,12 +201,12 @@ def _box(title: str, body_lines, width: int = 62) -> str:
     c = CYAN
     r = RESET
     title_visible = _visible_len(title)
-    top = c + "┌─ " + BOLD + title + r + c + " " + "─" * (width - title_visible - 4) + "┐" + r
+    top = c + "┌─ " + BOLD + title + r + c + " " + "─" * (width - title_visible - 3) + "┐" + r
     mid = []
     for line in body_lines:
         vlen = _visible_len(line)
         if vlen > width - 2:
-            for wl in textwrap.wrap(line, width=width - 2):
+            for wl in _wrap_visible(line, width=width - 2):
                 mid.append(c + "│ " + r + WHITE + _ljust_visible(wl, width - 2) + r + c + " │" + r)
         else:
             mid.append(c + "│ " + r + WHITE + _ljust_visible(line, width - 2) + r + c + " │" + r)
@@ -119,8 +238,9 @@ def _render_banner(shell) -> str:
     lines.append(border + "╔" + "═" * W + "╗" + c)
     lines.append(_banner_line(""))
 
-    # Wordmark
-    wordmark = BOLD + BRIGHT_CYAN + "███████  █████  ███████ ██   ██  █████  ██████  ██   ██" + c
+    # Wordmark (compact so it fits the 62-col box even on terminals that
+    # render U+2588 as 2 columns — 56 cols at 2x rendering)
+    wordmark = BOLD + BRIGHT_CYAN + "███ ███ ███ █ █ ███ █ █ ███ ███ █ █" + c
     lines.append(_banner_line("  " + wordmark))
     lines.append(_banner_line(""))
 
@@ -134,7 +254,7 @@ def _render_banner(shell) -> str:
 
     # Info section
     version = BOLD + BRIGHT_GREEN + "v1.00" + c
-    devs = BOLD + YELLOW + "Sagnik Ray | Suraj Mishra" + c
+    devs = DIM + "Sagnik Ray | Suraj Mishra" + c
     wave = CYAN + DIM + "~~~ ~~~~ ~~~ ~~~~ ~~~ ~~~~~ ~~~ ~~~~ ~~~~ ~~~~~" + c
     session_val = BRIGHT_GREEN + session_key + c
 
@@ -166,6 +286,7 @@ def _print_sessions(mgr) -> None:
 
 
 def main(argv=None):
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="EasyShark — terminal-native Wireshark replacement with AI analysis.")
     parser.add_argument("pcap", nargs="?",
@@ -232,8 +353,22 @@ def main(argv=None):
         session = mgr.create(pcap)
 
     from cli.shell import InteractiveShell
-    shell = InteractiveShell(pcap, enable_ai=not args.no_ai,
-                             session=session, session_manager=mgr)
+    try:
+        shell = InteractiveShell(pcap, enable_ai=not args.no_ai,
+                                 session=session, session_manager=mgr)
+    except FileNotFoundError as exc:
+        print(YELLOW + "⚠ " + str(exc) + RESET, file=sys.stderr)
+        print("  Check the path with `ls -l` and retry.", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(YELLOW + "⚠ " + str(exc) + RESET, file=sys.stderr)
+        print("  Replace it with a non-empty .pcap/.pcapng file.", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - surface any load-time failure cleanly
+        print(YELLOW + f"⚠ Failed to load PCAP: {exc}" + RESET, file=sys.stderr)
+        if args.debug:
+            raise
+        return 1
 
     # Print TUI banner
     try:
@@ -241,8 +376,9 @@ def main(argv=None):
         sys.stdout.write(banner + "\n")
         sys.stdout.flush()
     except UnicodeEncodeError:
+        # ASCII-safe fallback banner (no em-dash, no box/Unicode glyphs).
         print("=" * 64)
-        print("  EasyShark v1.00 — Interactive PCAP Shell")
+        print("  EasyShark v1.00 - Interactive PCAP Shell")
         print("  Developed By: Sagnik Ray | Suraj Mishra")
         print("=" * 64)
 

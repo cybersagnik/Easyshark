@@ -353,11 +353,6 @@ def triage_capabilities(packets: List[Any]) -> Dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# Pretty-printer (used by InteractiveShell banner; not required)
+# (render_capabilities removed in L19 — it was an unused banner helper.)
 # ---------------------------------------------------------------------------
-def render_capabilities(caps: Dict[str, bool]) -> str:
-    flags = {k: v for k, v in (caps or {}).items() if k in TRIAGE_FLAG_KEYS}
-    on  = [k for k, v in flags.items() if v]
-    off = [k for k, v in flags.items() if not v]
-    return (f"  Triage ON : {', '.join(on) if on else '(none)'}\n"
-            f"  Triage OFF: {', '.join(off)}")
+

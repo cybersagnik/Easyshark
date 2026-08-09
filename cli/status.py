@@ -17,9 +17,13 @@ import threading
 import time
 from typing import Callable, Optional
 
-from main import RESET, BOLD, DIM, CYAN, BRIGHT_CYAN, BRIGHT_GREEN, YELLOW
+from main import (RESET, BOLD, DIM, CYAN, BRIGHT_CYAN, BRIGHT_GREEN, YELLOW,
+                  UNICODE_GLYPHS)
 
-_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+if UNICODE_GLYPHS:
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+else:
+    _SPINNER_FRAMES = ("|", "/", "-", "\\")
 _TICK_SECONDS = 0.1
 
 

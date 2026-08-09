@@ -145,7 +145,8 @@ class CommandHandler:
         hits = result.get("hits", [])
         if not hits:
             return "(no hits)"
-        lines = [f"{h['pkt']:>5}  {h['match'][:60]}" for h in hits[:30]]
+        from core.sanitise import sanitise
+        lines = [f"{h['pkt']:>5}  {sanitise(h['match'][:60])}" for h in hits[:30]]
         return "\n".join(lines)
 
     def cmd_dissect(self, arg: str) -> str:
@@ -163,8 +164,9 @@ class CommandHandler:
         lines.append(f"  tcp_flags: {pkt.tcp_flags}")
         lines.append(f"  payload_size: {pkt.payload_size}")
         if pkt.payload:
+            from core.sanitise import sanitise
             preview = pkt.payload[:60].decode("latin-1", "replace")
-            lines.append(f"  payload_preview: {preview!r}")
+            lines.append(f"  payload_preview: {sanitise(preview)!r}")
         return "\n".join(lines)
 
     def cmd_hex(self, arg: str) -> str:
@@ -203,36 +205,30 @@ class CommandHandler:
         if not (0 <= idx < len(flows)):
             return self.fmt.error(f"flow_id {idx} out of range")
         flow = flows[idx]
+        from core.sanitise import sanitise
         text = (getattr(flow, "payload_bytes", b"") or b"").decode("latin-1", "replace")
         return (f"Flow {idx}: {flow.src_ip}:{flow.src_port} -> "
                 f"{flow.dst_ip}:{flow.dst_port}\n\n"
-                f"{text[:4000]}")
+                f"{sanitise(text)[:4000]}")
 
     def cmd_help(self, arg: str) -> str:
+        # L19 — the REPL intercepts `help`/`?` and calls
+        # shell._print_help() directly; this dispatch entry is a
+        # fallback that delegates to the same single source of truth
+        # rather than maintaining a second, drifting command list.
+        if hasattr(self.shell, "_print_help"):
+            self.shell._print_help()
+            return None
         return (
             "Commands:\n"
-            "  list                     list all packets\n"
-            "  show <idx>               one-line packet summary\n"
-            "  stats                    traffic counters\n"
-            "  alerts                   triggered detection alerts\n"
-            "  alerts <idx>             explain alert N via the LLM\n"
-            "  flows                    active TCP/UDP flows\n"
-            "  filter <expr>            Wireshark-style display filter\n"
-            "  search <regex>           regex search over TCP/UDP payloads\n"
-            "  dissect <idx>            full breakdown of one packet\n"
-            "  hex <idx>                full hex+ASCII dump of one packet payload\n"
-            "  follow tcp|udp <id>      reassembled stream for a flow\n"
-            "  protocols                per-protocol packet counts + dissection\n"
-            "  ips                      per-IP sent/received + protocols\n"
-            "  flows                    conversations + top flows (dissection-aware)\n"
-            "  dns                      DNS queries, NXDOMAINs, tunneling labels\n"
-            "  creds                    SMTP/HTTP/IMAP/POP3 credentials found\n"
-            "  summary                  deterministic capture overview\n"
-            "  extract                  carve file bytes to ~/.easyshark/extracted/\n"
-            "  analyze <question>       AI answer (uses LLM)\n"
-            "  / <question>             AI shortcut for ask-the-AI\n"
-            "  anomalies                ranked anomaly list (no LLM, <2s)\n"
-            "  timeline                 compressed behavioral timeline (no LLM)\n"
-            "  help                     this message\n"
-            "  exit                     quit the shell\n"
+            "  list | show <idx> | stats | alerts [idx]\n"
+            "  flows | filter <expr> | search <regex>\n"
+            "  dissect <idx> | hex <idx> | follow tcp|udp <id>\n"
+            "  protocols | ips | dns | creds | summary | extract <filename>\n"
+            "  anomalies | timeline | report [--json] [--force]\n"
+            "  analyze <question> | / <question> | investigate <q>\n"
+            "  rule snort|yara|python <desc>\n"
+            "  capture interfaces | start <iface> | stop | status\n"
+            "  sessions | session info | session forget | memory\n"
+            "  help | exit\n"
         )

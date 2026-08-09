@@ -17,11 +17,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from main import RESET, BOLD, DIM, CYAN, BRIGHT_CYAN, BRIGHT_GREEN, YELLOW, WHITE, _box
+from main import RESET, BOLD, DIM, CYAN, BRIGHT_CYAN, BRIGHT_GREEN, YELLOW, WHITE, _box, UNICODE_GLYPHS
 from .formatter import OutputFormatter
 from ai.investigator import (
     investigate,
@@ -37,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 
 REPORTS_DIR = Path.home() / ".easyshark" / "reports"
+
+
+def _live(text: str = "") -> None:
+    """Print a progress line immediately (unbuffered) during investigation."""
+    print(text)
+    sys.stdout.flush()
 
 
 # --------------------------------------------------------------------------- #
@@ -94,79 +101,78 @@ class InvestigateCommandHandler:
     # Linear path (debug / regression) — Phase 9 §9.4 --linear flag       #
     # ------------------------------------------------------------------ #
     def _run_linear(self, auto: bool,
-                    header_line: str = "INVESTIGATION  (agentic hypothesis → verify → conclude)") -> str:
-        out: List[str] = []
-        out.append("═" * 67)
-        out.append(header_line)
-        out.append("═" * 67)
-        out.append("")
+                    header_line: str = "INVESTIGATION  (agentic hypothesis → verify → conclude)") -> Optional[str]:
+        _live("═" * 67)
+        _live(header_line)
+        _live("═" * 67)
+        _live("")
 
         def emit(event: str, payload: Dict[str, Any]):
             """Print progress to stdout during the loop."""
             if event == "narrative_ready":
                 from cli.status import status
                 status("investigate", f"narrative ({payload['narrative_chars']} chars)")
-                out.append(f"  narrative built ({payload['narrative_chars']} chars, "
-                           f"{payload['anomaly_count']} anomalies)")
+                _live(f"  narrative built ({payload['narrative_chars']} chars, "
+                      f"{payload['anomaly_count']} anomalies)")
             elif event == "hypotheses_ready":
-                out.append(f"  generated {payload['count']} hypotheses:")
+                _live(f"  generated {payload['count']} hypotheses:")
                 for n in payload["names"]:
-                    out.append(f"    - {n}")
-                out.append("")
+                    _live(f"    - {n}")
+                _live("")
             elif event == "hypothesis_start":
                 from cli.status import status
                 status("investigate",
                        f"hypothesis {payload['index']}/{payload['total']} · "
                        f"{payload['name'][:40]}")
                 idx, total = payload["index"], payload["total"]
-                out.append("─" * 67)
-                out.append(f"HYPOTHESIS {idx}/{total}  [confidence: {payload['confidence'].upper()}]")
-                out.append(f"{payload['name']}")
-                out.append(f"{payload['description']}")
-                out.append("")
-                out.append("Supporting evidence:")
+                _live("─" * 67)
+                _live(f"HYPOTHESIS {idx}/{total}  [confidence: {payload['confidence'].upper()}]")
+                _live(f"{payload['name']}")
+                _live(f"{payload['description']}")
+                _live("")
+                _live("Supporting evidence:")
                 for ev in payload["supporting_evidence"][:3]:
-                    out.append(f"  → {ev}")
+                    _live(f"  → {ev}")
                 if payload["verification_plan"]:
-                    out.append("")
-                    out.append("Verification plan:")
+                    _live("")
+                    _live("Verification plan:")
                     for plan in payload["verification_plan"][:3]:
-                        out.append(f"  → {plan}")
-                out.append("")
+                        _live(f"  → {plan}")
+                _live("")
                 # Interactive prompt unless --auto.
                 if not auto:
-                    out.append("Verify this hypothesis? [y/n/skip all]:")
+                    _live("Verify this hypothesis? [y/n/skip all]:")
                     response = input("> ").strip().lower()
-                    out.append(f"> {response}")
+                    _live(f"> {response}")
                     if response in ("skip all", "skip", "s"):
                         # Cascade-skip remaining.
                         payload["_skip_remaining"] = True
                     elif response not in ("y", "yes"):
                         # User declined — mark as pending/ruled_out.
                         payload["_skip_this"] = True
-                    out.append("")
+                    _live("")
             elif event == "hypothesis_verdict":
                 from cli.status import status
                 verdict = (payload.get("verdict") or "?").upper()
                 conf = (payload.get("confidence_after") or "?").upper()
                 status("investigate",
                        f"verdict {verdict} · {payload.get('name','')[:40]}")
-                out.append("─" * 67)
-                out.append(f"VERDICT: {verdict}  [confidence: {conf}]")
+                _live("─" * 67)
+                _live(f"VERDICT: {verdict}  [confidence: {conf}]")
                 if payload.get("evidence_found"):
-                    out.append("Evidence found:")
+                    _live("Evidence found:")
                     for ev in payload["evidence_found"][:4]:
-                        out.append(f"  → {ev}")
+                        _live(f"  → {ev}")
                 if payload.get("reasoning"):
-                    out.append(f"Reasoning: {payload['reasoning']}")
-                out.append("")
+                    _live(f"Reasoning: {payload['reasoning']}")
+                _live("")
                 if not auto:
-                    out.append("Continue to next hypothesis? [y/n]:")
+                    _live("Continue to next hypothesis? [y/n]:")
                     response = input("> ").strip().lower()
-                    out.append(f"> {response}")
+                    _live(f"> {response}")
                     if response not in ("y", "yes"):
                         payload["_halt_loop"] = True
-                    out.append("")
+                    _live("")
 
         # Wrap emit() to short-circuit on skip/halt flags during run.
         state = {"skip_remaining": False, "halt": False}
@@ -200,60 +206,59 @@ class InvestigateCommandHandler:
                 h.confidence_after = "low"
                 h.reasoning = "(analyst declined to verify)"
 
-        out.append("═" * 67)
-        out.append("INVESTIGATION COMPLETE")
-        out.append("═" * 67)
-        out.append("")
+        _live("═" * 67)
+        _live("INVESTIGATION COMPLETE")
+        _live("═" * 67)
+        _live("")
         for h in report.hypotheses:
             verdict = (h.verdict or "?").upper()
             conf = (h.confidence_after or h.confidence).upper()
             tag = f"[{verdict}]"
-            out.append(f"  {tag:<14}  {h.name:<32}  confidence: {conf}")
-        out.append("")
-        out.append(f"  elapsed: {report.elapsed_sec:.1f}s, "
-                   f"LLM calls: {report.llm_calls}")
+            _live(f"  {tag:<14}  {h.name:<32}  confidence: {conf}")
+        _live("")
+        _live(f"  elapsed: {report.elapsed_sec:.1f}s, "
+              f"LLM calls: {report.llm_calls}")
 
         # ---- Final report (reuse auto_analyst schema + renderer) ----- #
-        out.append("")
-        out.append("─" * 67)
-        out.append("FINAL INCIDENT REPORT")
-        out.append("─" * 67)
-        out.append("")
-        out.append(_render_conclusion(report.conclusion))
+        _live("")
+        _live("─" * 67)
+        _live("FINAL INCIDENT REPORT")
+        _live("─" * 67)
+        _live("")
+        _live(_render_conclusion(report.conclusion))
 
         # Save prompt.
         if not auto:
-            out.append("")
-            out.append("─" * 67)
-            out.append("Save this report? [y/n]:")
+            _live("")
+            _live("─" * 67)
+            _live("Save this report? [y/n]:")
             try:
                 response = input("> ").strip().lower()
             except EOFError:
                 response = "n"
-            out.append(f"> {response}")
+            _live(f"> {response}")
             if response in ("y", "yes"):
                 try:
                     path = _save_report(report, self.shell.pcap_file)
-                    out.append(f"Report saved to {path}")
+                    _live(f"Report saved to {path}")
                 except Exception as exc:
-                    out.append(f"Save failed: {exc}")
+                    _live(f"Save failed: {exc}")
 
-        return "\n".join(out)
+        return None
 
     # ------------------------------------------------------------------ #
     # DAG path — Phase 9 §9.4                                             #
     # planner -> dag_runner (executor + critic) -> synthesis -> annotate  #
     # ------------------------------------------------------------------ #
-    def _run_dag(self, auto: bool, question: str) -> str:
+    def _run_dag(self, auto: bool, question: str) -> Optional[str]:
         from ai.planner import HypothesisPlanner
         from ai.dag_runner import DagRunner
         from ai.tool_registry import ToolContext
 
-        out: List[str] = []
-        out.append("═" * 67)
-        out.append("INVESTIGATION  (planner → executor → critic DAG)")
-        out.append("═" * 67)
-        out.append("")
+        _live("═" * 67)
+        _live("INVESTIGATION  (planner → executor → critic DAG)")
+        _live("═" * 67)
+        _live("")
 
         llm = self.shell.llm_client
         packets = self.shell.get_packets()
@@ -266,9 +271,9 @@ class InvestigateCommandHandler:
         anomalies = run_all(packets, flows)
         narrative = build(packets, flows, alerts, anomalies)
 
-        out.append(f"  narrative built ({len(narrative)} chars, "
-                   f"{len(anomalies)} anomalies)")
-        out.append("")
+        _live(f"  narrative built ({len(narrative)} chars, "
+              f"{len(anomalies)} anomalies)")
+        _live("")
 
         # -------------------------------------------------------------- #
         # Planner (small/fast role). Planner failure -> linear fallback.  #
@@ -295,18 +300,17 @@ class InvestigateCommandHandler:
             logger.warning("Planner failed: %s", exc)
             plan_items = None
         if not plan_items:
-            out.append("  planner produced no usable plan — "
-                       "falling back to linear investigation")
-            linear_out = self._run_linear(auto=auto, header_line=(
+            _live("  planner produced no usable plan — "
+                  "falling back to linear investigation")
+            return self._run_linear(auto=auto, header_line=(
                 "INVESTIGATION  (linear fallback — planner failed)"))
-            return "\n".join(out) + "\n" + linear_out
 
-        out.append(f"Planning investigation... [{len(plan_items)} hypotheses]")
+        _live(f"Planning investigation... [{len(plan_items)} hypotheses]")
         for item in plan_items:
             deps = (f"  (after {', '.join(item['depends_on'])})"
                     if item.get("depends_on") else "")
-            out.append(f"    {item['id']}: {item['hypothesis']}{deps}")
-        out.append("")
+            _live(f"    {item['id']}: {item['hypothesis']}{deps}")
+        _live("")
 
         # -------------------------------------------------------------- #
         # DAG execution                                                   #
@@ -318,46 +322,38 @@ class InvestigateCommandHandler:
                           triage=getattr(self.shell, "triage", None),
                           dissection=getattr(self.shell, "dissection", None))
         runner = DagRunner(llm_client=llm)
-        status_line: Dict[str, str] = {}
 
         def emit(event: str, payload: Dict[str, Any]):
             if event == "hypothesis_start":
                 from cli.status import status
                 status("investigate",
                        f"hypothesis {payload['id']} · {payload['name'][:40]}")
-                line = (CYAN + f"  {payload['id']}: "
-                        f"{payload['name'][:58]} ..." + RESET)
-                status_line[payload["id"]] = line
-                out.append(line)
+                _live(CYAN + f"  {payload['id']}: "
+                      f"{payload['name'][:58]} ..." + RESET)
             elif event == "tools_used":
-                out.append(DIM + f"      tools: {', '.join(payload['tools'])}" + RESET)
+                _live(DIM + f"      tools: {', '.join(payload['tools'])}" + RESET)
             elif event == "hypothesis_verdict":
                 colour_map = {"confirmed": BRIGHT_GREEN, "weakened": DIM,
                               "ruled_out": YELLOW, "inconclusive": DIM}
                 c = colour_map.get(payload["verdict"], WHITE)
-                mark_map = {"confirmed": "✓", "weakened": "~",
-                            "ruled_out": "✗", "inconclusive": "?"}
-                mark = mark_map.get(payload["verdict"], "?")
+                mark_map = {"confirmed": ("✓", "[+]"), "weakened": ("~", "~"),
+                            "ruled_out": ("✗", "[-]"), "inconclusive": ("?", "?")}
+                glyph, asc = mark_map.get(payload["verdict"], ("?", "?"))
+                mark = glyph if UNICODE_GLYPHS else asc
                 line = (c + f"      {mark} {payload['verdict'].upper():<12} "
                         f"confidence={payload['confidence']:.2f}" + RESET)
                 if payload.get("critic_issues"):
                     line += (DIM + "  [critic: "
                              + "; ".join(payload["critic_issues"][:2]) + "]" + RESET)
-                out.append(line)
-                prev = status_line.get(payload["id"])
-                if prev is not None:
-                    try:
-                        i = out.index(prev)
-                        out[i] = prev + c + f"  {mark}" + RESET
-                    except ValueError:
-                        pass
+                _live(line)
             elif event == "hypothesis_backtrack":
                 # Gap 3 — the DAG is retrying an inconclusive hypothesis with
                 # a narrowed-evidence prompt. Surface it so the analyst knows
                 # the "?" is being re-investigated, not dropped.
-                out.append(DIM +
-                           f"      ⟲ inconclusive (conf={payload['confidence']:.2f}) "
-                           f"— retrying with narrowed evidence..." + RESET)
+                _live(DIM +
+                      f"      {'⟲' if UNICODE_GLYPHS else '<-'} inconclusive "
+                      f"(conf={payload['confidence']:.2f}) "
+                      f"— retrying with narrowed evidence..." + RESET)
 
         dag = runner.run(plan_items, ctx, on_event=emit)
 
@@ -379,18 +375,22 @@ class InvestigateCommandHandler:
         except Exception as exc:
             logger.debug("prompt_distiller skipped: %s", exc)
 
-        out.append("")
-        out.append("─" * 67)
-        out.append("DAG RESULTS")
-        out.append("─" * 67)
+        _live("")
+        _live("─" * 67)
+        _live("DAG RESULTS")
+        _live("─" * 67)
         for h in dag.hypotheses:
-            mark = {"confirmed": "✓", "weakened": "~",
-                    "ruled_out": "✗", "inconclusive": "?"}.get(h.verdict, "?")
+            glyph_map = {"confirmed": "✓", "weakened": "~",
+                         "ruled_out": "✗", "inconclusive": "?"}
+            asc_map = {"confirmed": "[+]", "weakened": "~",
+                       "ruled_out": "[-]", "inconclusive": "?"}
+            glyph = glyph_map.get(h.verdict, "?")
+            mark = glyph if UNICODE_GLYPHS else asc_map.get(h.verdict, "?")
             tag = (f"[{h.verdict.upper()}]" if h.verdict != "inconclusive"
                    else "[?]")
-            out.append(f"  {tag:<10}  {h.short_label():<52} "
-                       f"conf={h.confidence:.2f} {mark}")
-        out.append("")
+            _live(f"  {tag:<10}  {h.short_label():<52} "
+                  f"conf={h.confidence:.2f} {mark}")
+        _live("")
 
         # -------------------------------------------------------------- #
         # Synthesis (conclusion) — reuse the auto_analyst schema.         #
@@ -436,46 +436,46 @@ class InvestigateCommandHandler:
         if not report.conclusion:
             report.conclusion = _fallback_conclusion(report)
 
-        out.append("─" * 67)
-        out.append("INVESTIGATION COMPLETE")
-        out.append("─" * 67)
-        out.append("")
+        _live("─" * 67)
+        _live("INVESTIGATION COMPLETE")
+        _live("─" * 67)
+        _live("")
         for h in report.hypotheses:
             verdict = (h.verdict or "?").upper()
             conf = (h.confidence_after or h.confidence).upper()
-            out.append(f"  [{verdict:<11}]  {h.name:<40}  confidence: {conf}")
-        out.append("")
-        out.append(f"  elapsed: {dag.elapsed_sec:.1f}s, "
-                   f"LLM calls: {report.llm_calls} "
-                   f"(planner {planner_calls} + exec {dag.executor_calls} "
-                   f"+ critic {dag.critic_calls} + synthesis {synthesis_calls})")
+            _live(f"  [{verdict:<11}]  {h.name:<40}  confidence: {conf}")
+        _live("")
+        _live(f"  elapsed: {dag.elapsed_sec:.1f}s, "
+              f"LLM calls: {report.llm_calls} "
+              f"(planner {planner_calls} + exec {dag.executor_calls} "
+              f"+ critic {dag.critic_calls} + synthesis {synthesis_calls})")
 
         # ---- Final report (reuse auto_analyst schema + renderer) ----- #
-        out.append("")
-        out.append("─" * 67)
-        out.append("FINAL INCIDENT REPORT")
-        out.append("─" * 67)
-        out.append("")
-        out.append(_render_conclusion(report.conclusion))
+        _live("")
+        _live("─" * 67)
+        _live("FINAL INCIDENT REPORT")
+        _live("─" * 67)
+        _live("")
+        _live(_render_conclusion(report.conclusion))
 
         # Save prompt.
         if not auto:
-            out.append("")
-            out.append("─" * 67)
-            out.append("Save this report? [y/n]:")
+            _live("")
+            _live("─" * 67)
+            _live("Save this report? [y/n]:")
             try:
                 response = input("> ").strip().lower()
             except EOFError:
                 response = "n"
-            out.append(f"> {response}")
+            _live(f"> {response}")
             if response in ("y", "yes"):
                 try:
                     path = _save_report(report, self.shell.pcap_file)
-                    out.append(f"Report saved to {path}")
+                    _live(f"Report saved to {path}")
                 except Exception as exc:
-                    out.append(f"Save failed: {exc}")
+                    _live(f"Save failed: {exc}")
 
-        return "\n".join(out)
+        return None
 
 
 def _conf_label(confidence: float) -> str:

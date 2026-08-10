@@ -253,8 +253,8 @@ def _render_banner(shell) -> str:
     lines.append(border + "╠" + "═" * W + "╣" + c)
 
     # Info section
-    version = BOLD + BRIGHT_GREEN + "v1.00" + c
-    devs = DIM + "Sagnik Ray | Suraj Mishra" + c
+    version = BOLD + BRIGHT_GREEN + "v2.00" + c
+    devs = DIM + "Sagnik Ray | Suraj Mishra | Md Sahil Molla" + c
     wave = CYAN + DIM + "~~~ ~~~~ ~~~ ~~~~ ~~~ ~~~~~ ~~~ ~~~~ ~~~~ ~~~~~" + c
     session_val = BRIGHT_GREEN + session_key + c
 
@@ -435,8 +435,8 @@ def main(argv=None):
     except UnicodeEncodeError:
         # ASCII-safe fallback banner (no em-dash, no box/Unicode glyphs).
         print("=" * 64)
-        print("  EasyShark v1.00 - Interactive PCAP Shell")
-        print("  Developed By: Sagnik Ray | Suraj Mishra")
+        print("  EasyShark v2.00 - Autonomous Interactive PCAP Shell")
+        print("  Developed By: Sagnik Ray | Suraj Mishra | Md Sahil Molla")
         print("=" * 64)
 
     if args.autonomous:

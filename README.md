@@ -1,9 +1,9 @@
-# EasyShark v1.0.0 (Beta Version)
+# EasyShark v2.0.0 (Autonomous Edition)
 
 <p align="center" style="color: #00d4ff; font-weight: bold; line-height: 1.05;">
 <pre style="color: #00d4ff; font-weight: bold;">
                     ███████  █████  ███████ ██   ██  █████  ██████  ██   ██
-                                                                   v1.0.0
+                                                                   v2.0.0
 
 
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠲⣶⣶⣤⣤⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
@@ -33,7 +33,7 @@
 </p>
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-v1.0.0--dev-brightgreen" alt="Version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-v2.0.0--autonomous-brightgreen" alt="Version"></a>
   <a href=""><img src="https://img.shields.io/badge/open%20source-%E2%9D%A4-red" alt="Open Source"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"></a>
 </p>

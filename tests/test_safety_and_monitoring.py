@@ -1,9 +1,12 @@
 import tempfile
 import unittest
 import zipfile
+import os
 import json
 import urllib.error
 import urllib.request
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -104,6 +107,50 @@ class TestSafetyAndMonitoring(unittest.TestCase):
             self.assertEqual(body["queue"]["done"], 2)
         finally:
             server.close()
+
+    def test_webhook_failure_is_drained_after_recovery(self):
+        calls = []
+        state = {"ok": False}
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            def do_POST(self):
+                calls.append(self.path)
+                if not state["ok"]:
+                    self.send_response(503)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            def log_message(self, *_args):
+                return
+        http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=http.serve_forever, daemon=True)
+        thread.start()
+        old_http = os.environ.get("EASYSHARK_ALLOW_HTTP_WEBHOOK")
+        os.environ["EASYSHARK_ALLOW_HTTP_WEBHOOK"] = "1"
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                outbox = str(Path(folder) / "outbox.db")
+                from core.monitor import WebhookAlerter
+                url = f"http://127.0.0.1:{http.server_port}/events"
+                alerter = WebhookAlerter(url, retries=0, outbox_path=outbox,
+                                         approved=True)
+                with self.assertRaises(RuntimeError):
+                    alerter.send({"event": "mission_failed"})
+                self.assertEqual(len(alerter.outbox.pending()), 1)
+                state["ok"] = True
+                self.assertEqual(alerter.drain(), 1)
+                self.assertEqual(alerter.outbox.pending(), [])
+                self.assertGreaterEqual(len(calls), 2)
+        finally:
+            if old_http is None:
+                os.environ.pop("EASYSHARK_ALLOW_HTTP_WEBHOOK", None)
+            else:
+                os.environ["EASYSHARK_ALLOW_HTTP_WEBHOOK"] = old_http
+            http.shutdown()
+            http.server_close()
 
     def test_job_queue_is_durable_and_retries(self):
         with tempfile.TemporaryDirectory() as folder:

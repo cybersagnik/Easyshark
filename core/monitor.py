@@ -30,7 +30,7 @@ class WebhookAlerter:
         self._sent = set()
         self.outbox = AlertOutbox(outbox_path)
 
-    def send(self, event: Dict) -> None:
+    def send(self, event: Dict, _queue_on_failure: bool = True) -> None:
         body = json.dumps(event, default=str).encode("utf-8")
         event_id = json.dumps(event, sort_keys=True, default=str)
         if event_id in self._sent:
@@ -53,6 +53,8 @@ class WebhookAlerter:
                 if attempt < self.retries:
                     time.sleep(min(2 ** attempt, 8))
         else:
+            if not _queue_on_failure:
+                raise RuntimeError(f"webhook delivery failed: {last}")
             self.outbox.put(event)
             raise RuntimeError(f"webhook delivery failed: {last}")
         record("external_alert", target=self.url, event=event)
@@ -61,7 +63,7 @@ class WebhookAlerter:
         delivered = 0
         for row in self.outbox.pending(limit):
             try:
-                self.send(row["event"])
+                self.send(row["event"], _queue_on_failure=False)
                 self.outbox.remove(row["id"])
                 delivered += 1
             except Exception:

@@ -361,11 +361,12 @@ def main(argv=None):
         from core.daemon import MissionDaemon
         try:
             MissionDaemon(args.monitor, args.mission, args.interval,
-                          webhook=args.webhook,
+                          webhook=args.webhook or os.environ.get("EASYSHARK_WEBHOOK_URL"),
                           health_port=args.health_port,
                           event_log=args.event_log,
                           threat_feed=args.threat_feed,
-                          event_webhook=args.event_webhook).run(once=args.once)
+                          event_webhook=(args.event_webhook or
+                                         os.environ.get("EASYSHARK_EVENT_WEBHOOK"))).run(once=args.once)
         except Exception as exc:
             print(YELLOW + f"⚠ Monitor failed: {exc}" + RESET, file=sys.stderr)
             return 1

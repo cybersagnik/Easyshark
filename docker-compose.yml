@@ -1,0 +1,26 @@
+services:
+  easyshark:
+    build: .
+    command:
+      - --monitor
+      - /captures
+      - --interval
+      - "30"
+      - --health-port
+      - "8765"
+    environment:
+      EASYSHARK_STATE_DIR: /data/.easyshark
+      EASYSHARK_HEALTH_TOKEN: ${EASYSHARK_HEALTH_TOKEN:?set EASYSHARK_HEALTH_TOKEN}
+      EASYSHARK_WEBHOOK_URL: ${EASYSHARK_WEBHOOK_URL:-}
+      EASYSHARK_EVENT_WEBHOOK: ${EASYSHARK_EVENT_WEBHOOK:-}
+      EASYSHARK_WEBHOOK_TOKEN: ${EASYSHARK_WEBHOOK_TOKEN:-}
+      EASYSHARK_EVENT_TOKEN: ${EASYSHARK_EVENT_TOKEN:-}
+      EASYSHARK_THREAT_FEED: ${EASYSHARK_THREAT_FEED:-}
+    volumes:
+      - ./captures:/captures:ro
+      - easyshark-data:/data
+    ports:
+      - "127.0.0.1:8765:8765"
+
+volumes:
+  easyshark-data:

@@ -152,6 +152,9 @@ docker run --rm -v "$PWD/captures:/captures" -v easyshark-data:/data \
   --monitor /captures --health-port 8765 --once
 ```
 
+For a continuously running deployment, copy `.env.example`, set a strong
+`EASYSHARK_HEALTH_TOKEN`, and run `docker compose up --build`.
+
 Run the durable autonomous monitor:
 
 ```bash

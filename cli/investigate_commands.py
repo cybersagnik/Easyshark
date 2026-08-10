@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -37,7 +38,8 @@ from ai.investigator import (
 logger = logging.getLogger(__name__)
 
 
-REPORTS_DIR = Path.home() / ".easyshark" / "reports"
+REPORTS_DIR = Path(os.environ.get(
+    "EASYSHARK_REPORTS_DIR", str(Path.home() / ".easyshark" / "reports")))
 
 
 def _live(text: str = "") -> None:
@@ -52,9 +54,22 @@ def _live(text: str = "") -> None:
 class InvestigateCommandHandler:
     """Mirrors cli.commands.CommandHandler interface."""
 
-    def __init__(self, shell):
+    def __init__(self, shell, threat_intel=None):
         self.shell = shell
         self.fmt = OutputFormatter()
+        self.threat_intel = threat_intel
+
+    def _enrich_report(self, report: InvestigationReport) -> None:
+        """Attach feed matches without letting enrichment change verdicts."""
+        if self.threat_intel is None:
+            return
+        text = report.narrative + " " + json.dumps(report.conclusion, default=str)
+        values = set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text))
+        values.update(re.findall(r"\b[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}\b",
+                                 text.lower()))
+        matches = self.threat_intel.enrich(values)
+        if matches:
+            report.conclusion["threat_intel"] = matches
 
     def handle(self, line: str) -> Optional[str]:
         line = line.strip()
@@ -62,11 +77,13 @@ class InvestigateCommandHandler:
             return None
         parts = line.split(None, 1)
         verb = parts[0].lower()
-        if verb != "investigate":
+        if verb not in ("investigate", "autonomous"):
             return self.fmt.error(f"unknown command: {verb}")
         arg = (parts[1] if len(parts) > 1 else "").strip()
-        auto = "--auto" in arg
-        linear = "--linear" in arg
+        # `autonomous` is the non-interactive alias; keep `investigate`'s
+        # existing engine and flags so there is only one agent path.
+        auto = verb == "autonomous" or "--auto" in arg
+        linear = verb != "autonomous" and "--linear" in arg
         question = " ".join(
             tok for tok in arg.split() if tok not in ("--auto", "--linear")
         )
@@ -76,10 +93,13 @@ class InvestigateCommandHandler:
             self.shell._ensure_llm_client()
         except Exception:
             pass
-        if getattr(self.shell, "llm_client", None) is None or \
-                not self.shell.llm_client.is_available():
+        if not auto and (getattr(self.shell, "llm_client", None) is None or
+                         not self.shell.llm_client.is_available()):
             return ("LLM client unavailable. Cannot run investigation.\n"
                     "  Start Ollama:  ollama serve")
+        if auto and (getattr(self.shell, "llm_client", None) is None or
+                     not self.shell.llm_client.is_available()):
+            _live("  no LLM backend available — using deterministic analysis")
 
         # ---- Live activity status on stderr (cli/status.py) ----------- #
         from cli.status import status, status_finish
@@ -196,6 +216,7 @@ class InvestigateCommandHandler:
                 state["halt"] = True
 
         report = investigate(self.shell, on_event=emit_wrapped)
+        self._enrich_report(report)
 
         # In interactive skip-this path, post-process: convert declines
         # into ruled_out entries. (Best-effort: mark the most recent
@@ -243,6 +264,16 @@ class InvestigateCommandHandler:
                     _live(f"Report saved to {path}")
                 except Exception as exc:
                     _live(f"Save failed: {exc}")
+        else:
+            # Headless missions must leave a durable artifact without asking
+            # for input.  This is a local write only; no external action is
+            # taken automatically.
+            try:
+                path = _save_report(report, self.shell.pcap_file)
+                _live(f"Report saved to {path}")
+            except Exception as exc:
+                logger.warning("autonomous report save failed: %s", exc)
+                _live(f"Report save failed: {exc}")
 
         return None
 
@@ -266,6 +297,8 @@ class InvestigateCommandHandler:
         alerts: List[Any] = []
         for r in self.shell.rules:
             alerts.extend(r.get_alerts())
+        from ai.evidence_graph import from_capture
+        evidence_graph = from_capture(packets, flows, alerts)
         from core.detectors import run_all
         from core.narrative import build
         anomalies = run_all(packets, flows)
@@ -356,6 +389,11 @@ class InvestigateCommandHandler:
                       f"— retrying with narrowed evidence..." + RESET)
 
         dag = runner.run(plan_items, ctx, on_event=emit)
+        from ai.evidence_graph import references_from_evidence
+        for hypothesis in dag.hypotheses:
+            refs = references_from_evidence(hypothesis.evidence)
+            evidence_graph.claim(
+                f"hypothesis:{hypothesis.id}", hypothesis.hypothesis, refs)
 
         # Phase 11 §11.1 — merge the just-persisted critic-approved verdicts
         # into the pattern store on a background thread (non-blocking).
@@ -435,6 +473,7 @@ class InvestigateCommandHandler:
         )
         if not report.conclusion:
             report.conclusion = _fallback_conclusion(report)
+        self._enrich_report(report)
 
         _live("─" * 67)
         _live("INVESTIGATION COMPLETE")
@@ -470,10 +509,19 @@ class InvestigateCommandHandler:
             _live(f"> {response}")
             if response in ("y", "yes"):
                 try:
-                    path = _save_report(report, self.shell.pcap_file)
+                    path = _save_report(report, self.shell.pcap_file,
+                                        evidence_graph=evidence_graph)
                     _live(f"Report saved to {path}")
                 except Exception as exc:
                     _live(f"Save failed: {exc}")
+        else:
+            try:
+                path = _save_report(report, self.shell.pcap_file,
+                                    evidence_graph=evidence_graph)
+                _live(f"Report saved to {path}")
+            except Exception as exc:
+                logger.warning("autonomous report save failed: %s", exc)
+                _live(f"Report save failed: {exc}")
 
         return None
 
@@ -554,7 +602,8 @@ def _render_conclusion(payload: Dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # Report save                                                                 #
 # --------------------------------------------------------------------------- #
-def _save_report(report: InvestigationReport, pcap_path: str) -> str:
+def _save_report(report: InvestigationReport, pcap_path: str,
+                 evidence_graph: Optional[Dict[str, Any]] = None) -> str:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
     base = os.path.basename(pcap_path)
@@ -580,6 +629,7 @@ def _save_report(report: InvestigationReport, pcap_path: str) -> str:
             for h in report.hypotheses
         ],
         "conclusion": report.conclusion,
+        "evidence_graph": evidence_graph.as_dict() if hasattr(evidence_graph, "as_dict") else (evidence_graph or {}),
     }
     out_path.write_text(json.dumps(blob, indent=2, default=str))
     return str(out_path)

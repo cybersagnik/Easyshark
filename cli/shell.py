@@ -326,7 +326,7 @@ class InteractiveShell:
                 print(out)
             return
 
-        if low.startswith("investigate"):
+        if low.startswith("investigate") or low.startswith("autonomous"):
             self._ensure_llm_client()
             handler = InvestigateCommandHandler(self)
             out = handler.handle(line)
@@ -471,6 +471,7 @@ class InteractiveShell:
             ("anomalies", "Ranked anomaly list (no LLM, <2s)"),
             ("timeline", "Behavioral timeline (no LLM, <2s)"),
             ("investigate <q>", "Multi-hypothesis investigation"),
+            ("autonomous [mission]", "Run a headless investigation and save its report"),
             ("rule snort|yara|python <desc>", "Generate detection rule"),
             ("list", "List all packets"),
             ("show <idx>", "One-line packet summary"),
@@ -665,6 +666,23 @@ class InteractiveShell:
             self._memory_show_verdicts()
         elif verb.startswith("show-iocs") or verb == "iocs":
             self._memory_show_iocs()
+        elif verb.startswith("rsi status"):
+            from ai.rsi import status
+            print("RSI status: " + ", ".join(
+                f"{k}={v}" for k, v in status().items()))
+        elif verb.startswith("rsi label "):
+            raw = verb[len("rsi label "):].strip()
+            parts = raw.split(None, 1)
+            if len(parts) != 2 or parts[0] not in ("good", "bad"):
+                print("Usage: memory rsi label good|bad <question>")
+                return
+            from ai.rsi import record_feedback
+            count = record_feedback(parts[1], parts[0] == "good")
+            print(f"RSI feedback recorded; updated {count} pattern(s).")
+        elif verb in ("jobs", "queue"):
+            from core.job_queue import JobQueue
+            print("Mission queue: " + ", ".join(
+                f"{k}={v}" for k, v in JobQueue().stats().items()))
         else:
             print("Usage:")
             print("  memory status            — stores + sizes")
@@ -672,6 +690,9 @@ class InteractiveShell:
             print("  memory show-patterns     — learned tool-usage patterns")
             print("  memory show-verdicts     — recent critic-approved verdicts")
             print("  memory show-iocs         — remembered IOC indicators")
+            print("  memory rsi status        — candidate/active/retired patterns")
+            print("  memory rsi label good|bad <question>")
+            print("  memory jobs             — autonomous mission queue status")
 
     def _memory_status(self) -> None:
         print(section("Self-learning stores"))
@@ -739,6 +760,9 @@ class InteractiveShell:
             n = int(r.get("sample_count", 0))
             kws = ", ".join((r.get("question_keywords") or [])[:4]) or "?"
             tools = ", ".join(str(t) for t in (r.get("tool_sequence") or [])[:4])
+            state = r.get("status", "candidate")
+            feedback = f"{int(r.get('feedback_pass', 0))}/{int(r.get('feedback_total', 0))}"
+            print(f"       state: {state}  analyst feedback: {feedback}")
             print(f"  {i:>2}. [{rate:.0%}×{n}] {kws}")
             print(f"       tools: {tools}")
 

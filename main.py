@@ -282,7 +282,31 @@ def _print_sessions(mgr) -> None:
     print("  " + "-" * 100)
     for s in sessions:
         print(f"  {s.key:<14} {s.last_active:<22}  {s.pcap_path}")
-    print("\nResume with: python3 main.py --session <key>")
+        print("\nResume with: python3 main.py --session <key>")
+
+
+def _prepare_state_dir() -> Path:
+    """Select a writable state directory before importing stateful modules."""
+    preferred = Path(os.environ.get(
+        "EASYSHARK_STATE_DIR", str(Path.home() / ".easyshark")))
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        probe = preferred / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        state_dir = preferred
+    except OSError:
+        state_dir = Path.cwd() / ".easyshark"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Warning: using writable local state directory {state_dir}",
+              file=sys.stderr)
+    os.environ["EASYSHARK_STATE_DIR"] = str(state_dir)
+    os.environ.setdefault("EASYSHARK_SESSIONS_DIR", str(state_dir / "sessions"))
+    os.environ.setdefault("EASYSHARK_QUEUE_DB", str(state_dir / "jobs.db"))
+    os.environ.setdefault("EASYSHARK_AUDIT_PATH", str(state_dir / "audit.jsonl"))
+    os.environ.setdefault("EASYSHARK_MEMORY_DIR", str(state_dir))
+    os.environ.setdefault("EASYSHARK_REPORTS_DIR", str(state_dir / "reports"))
+    return state_dir
 
 
 def main(argv=None):
@@ -298,11 +322,29 @@ def main(argv=None):
     parser.add_argument("--forget", action="store_true",
                         help="Delete the session selected by --session and exit")
     parser.add_argument("--no-ai", action="store_true", help="Disable AI features")
+    parser.add_argument("--autonomous", action="store_true",
+                        help="Run one autonomous investigation and exit")
+    parser.add_argument("--mission", default="Analyze the suspicious activity in this capture.",
+                        help="Mission for --autonomous")
+    parser.add_argument("--monitor", metavar="DIR",
+                        help="Watch a directory and autonomously analyze new PCAPs")
+    parser.add_argument("--interval", type=float, default=30.0,
+                        help="Monitor polling interval in seconds")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one monitor scan/queue drain and exit")
+    parser.add_argument("--webhook", help="Optional alert webhook URL")
+    parser.add_argument("--health-port", type=int,
+                        help="Expose /health and /metrics for monitor mode")
+    parser.add_argument("--event-log",
+                        help="Write versioned JSONL mission events for SIEM ingestion")
+    parser.add_argument("--event-webhook",
+                        help="Optional HTTPS sink for versioned SIEM/SOAR events")
+    parser.add_argument("--threat-feed",
+                        help="Local JSON threat-intelligence feed for IOC enrichment")
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
     args = parser.parse_args(argv)
 
-    log_dir = Path.home() / ".easyshark"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = _prepare_state_dir()
     handlers = [logging.FileHandler(log_dir / "easyshark.log", encoding="utf-8")]
     if args.debug:
         handlers.append(logging.StreamHandler())
@@ -314,6 +356,20 @@ def main(argv=None):
 
     from core.session_manager import SessionManager
     mgr = SessionManager()
+
+    if args.monitor:
+        from core.daemon import MissionDaemon
+        try:
+            MissionDaemon(args.monitor, args.mission, args.interval,
+                          webhook=args.webhook,
+                          health_port=args.health_port,
+                          event_log=args.event_log,
+                          threat_feed=args.threat_feed,
+                          event_webhook=args.event_webhook).run(once=args.once)
+        except Exception as exc:
+            print(YELLOW + f"⚠ Monitor failed: {exc}" + RESET, file=sys.stderr)
+            return 1
+        return 0
 
     if args.sessions:
         _print_sessions(mgr)
@@ -381,6 +437,30 @@ def main(argv=None):
         print("  EasyShark v1.00 - Interactive PCAP Shell")
         print("  Developed By: Sagnik Ray | Suraj Mishra")
         print("=" * 64)
+
+    if args.autonomous:
+        from cli.investigate_commands import InvestigateCommandHandler
+        from core.threat_intel import ThreatIntel
+        mission = args.mission.strip()
+        if not mission:
+            print("--mission must not be empty", file=sys.stderr)
+            return 2
+        try:
+            intel = ThreatIntel(args.threat_feed or
+                                os.environ.get("EASYSHARK_THREAT_FEED"))
+        except Exception as exc:
+            print(f"Invalid threat-intelligence feed: {exc}", file=sys.stderr)
+            return 2
+        handler = InvestigateCommandHandler(shell, threat_intel=intel)
+        result = handler.handle("autonomous " + mission)
+        if result:
+            print(result, file=sys.stderr)
+            return 1
+        try:
+            mgr.save(session)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("session save failed: %s", exc)
+        return 0
 
     shell.run()
     return 0

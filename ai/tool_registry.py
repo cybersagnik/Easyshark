@@ -806,11 +806,24 @@ def run_python_eval(code: str, ctx: ToolContext,
     if len(code) > 4000:
         return {"error": f"code too long ({len(code)} chars; max 4000)"}
 
-    # Reject obvious sandbox-escape attempts in the source string
-    # before we even try to run it.
+    # Reject obvious sandbox-escape attempts before either execution mode.
     for bad in _PY_EVAL_BANLIST:
         if re.search(rf"\b{re.escape(bad)}\b", code):
             return {"error": f"python_eval: '{bad}' is not allowed in the sandbox"}
+
+    if os.environ.get("EASYSHARK_PROCESS_SANDBOX", "0") == "1":
+        from ai.sandbox import run as run_isolated
+        se = getattr(ctx, "stats_engine", None)
+        variables = {
+            "packets": list(getattr(ctx, "packets", []) or []),
+            "flows": list(getattr(ctx, "flows", []) or []),
+            "alerts": list(getattr(ctx, "alerts", []) or []),
+            "stats": se.summary() if se is not None and hasattr(se, "summary") else {},
+            "pcap": getattr(ctx, "pcap_path", None),
+        }
+        if extra_globals:
+            variables.update(extra_globals)
+        return run_isolated(code, variables, timeout=_PY_EVAL_TIMEOUT_SEC)
 
     start = _perf_counter()
 

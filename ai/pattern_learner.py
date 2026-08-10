@@ -47,6 +47,7 @@ PATTERNS_PATH = Path(os.environ.get(
     "EASYSHARK_PATTERNS_PATH", str(Path.home() / ".easyshark" / "patterns.jsonl")))
 
 _ENABLED = os.environ.get("EASYSHARK_PATTERNS_ENABLED", "1") != "0"
+_RSI_REQUIRE_FEEDBACK = os.environ.get("EASYSHARK_RSI_REQUIRE_FEEDBACK", "1") != "0"
 
 # Confidence gate: only patterns whose success_rate clears this bar are
 # allowed to override the LLM planner's own tool hints.
@@ -163,6 +164,9 @@ def update_patterns(question: str,
                     "success_rate": success,
                     "sample_count": 1,
                     "mean_confidence": round(confidence or success, 4),
+                    "status": "candidate",
+                    "feedback_total": 0,
+                    "feedback_pass": 0,
                 })
             else:
                 n = int(best.get("sample_count", 1))
@@ -259,13 +263,18 @@ def suggest_tools(question: str) -> Optional[List[str]]:
             continue
         rate = float(row.get("success_rate", 0.0))
         n = int(row.get("sample_count", 0))
-        if rate < SUGGEST_CONFIDENCE or n < SUGGEST_MIN_SAMPLES:
+        min_samples = 1 if _RSI_REQUIRE_FEEDBACK else SUGGEST_MIN_SAMPLES
+        if rate < SUGGEST_CONFIDENCE or n < min_samples:
             continue
         tools = row.get("tool_sequence") or []
         # Gap 4 — weight by the rolling mean of the numeric verdict
         # confidence so high-certainty evidence outranks barely-confident
         # successes when both clear the success-rate gate.
         conf = float(row.get("mean_confidence", rate))
+        if _RSI_REQUIRE_FEEDBACK:
+            from ai.rsi import validate_pattern
+            if not validate_pattern(row):
+                continue
         scored.append((overlap * rate * conf, n, tools))
     if not scored:
         return None

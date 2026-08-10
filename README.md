@@ -110,6 +110,80 @@ pcap > analyze How many TCP packets were sent to port 443 by 192.168.1.158?
 pcap > investigate What happened in this capture? --auto
 ```
 
+### Autonomous headless investigation
+
+Run the planner, executor, critic, and report synthesis without entering the
+interactive shell. The JSON report is saved under `~/.easyshark/reports/`:
+
+```bash
+python3 main.py PCAP_SAMPLES/evidence01.pcap --autonomous \
+  --mission "Investigate suspicious activity and possible data exfiltration" \
+  --threat-feed ./intel.json
+```
+
+RSI patterns start as candidates and are not reused until independently
+validated. After reviewing a result, label a matching pattern from the shell:
+
+```text
+pcap > memory rsi label good What SMTP username was used?
+pcap > memory rsi status
+```
+
+Patterns require three independent labels and a 75% positive rate before
+promotion. Repeated negative labels retire them automatically. Set
+`EASYSHARK_RSI_REQUIRE_FEEDBACK=0` only to restore legacy heuristic-only
+behavior.
+
+## Monitoring and deployment
+
+`core.monitor.PCAPMonitor` watches a directory for new PCAPs and can invoke
+the autonomous mission callback once per capture. `WebhookAlerter` provides a
+dependency-free HTTP alert integration, while `core.audit` records local
+operations and `core.observability` exposes counters.
+
+Generated analysis tools can use a separate interpreter by setting
+`EASYSHARK_PROCESS_SANDBOX=1`. Build the included non-root container with:
+
+```bash
+docker build -t easyshark .
+# Persistent state and monitor health port:
+docker run --rm -v "$PWD/captures:/captures" -v easyshark-data:/data \
+  -p 127.0.0.1:8765:8765 easyshark \
+  --monitor /captures --health-port 8765 --once
+```
+
+Run the durable autonomous monitor:
+
+```bash
+python3 main.py --monitor ./captures --interval 30 \
+  --mission "Investigate suspicious activity and possible exfiltration" \
+  --webhook https://example.invalid/security-events
+```
+
+Jobs are persisted in `~/.easyshark/jobs.db`, retried up to three times, and
+reports are written to `~/.easyshark/reports/`.
+
+For local monitoring health checks, add `--health-port 8765` and query
+`http://127.0.0.1:8765/health` or `/metrics`.
+Set `EASYSHARK_HEALTH_TOKEN` to require the `X-EasyShark-Token` header.
+Use `--event-log ~/.easyshark/events.jsonl` for a versioned SIEM-ingestion
+stream. Use `--event-webhook https://siem.example/events` to send the same
+versioned envelopes to a SIEM/SOAR endpoint; failed deliveries are persisted
+in a separate outbox and retried after restart.
+Use `--threat-feed ./intel.json` (or `EASYSHARK_THREAT_FEED`) to attach local
+IOC verdicts to autonomous reports. Remote feeds must be loaded by a trusted
+HTTPS-capable integration; the core feed loader rejects non-HTTPS URLs.
+
+The monitor requires HTTPS webhooks by default. Set
+`EASYSHARK_ALLOW_HTTP_WEBHOOK=1` only for a trusted local test endpoint.
+
+GitHub Actions runs the Python test suite and builds the Docker image on every
+push and pull request.
+
+Labelled RSI cases can be scored with `ai.benchmark.score`; cases are JSONL
+records containing `question` and `expected_tools`. Only `active` patterns are
+included in benchmark predictions.
+
 ---
 
 ## Commands

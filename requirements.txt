@@ -1,6 +1,9 @@
 scapy>=2.5.0
 # Persistent HTTP connection pooling for cloud LLM transports.
 requests>=2.31.0
+# Optional daemon web interface (the standalone CLI does not import these).
+fastapi>=0.110.0
+uvicorn>=0.29.0
 # groq is OPTIONAL; the project runs on Ollama by default.
 # Install only if you want the Groq fallback:
 #   pip install groq

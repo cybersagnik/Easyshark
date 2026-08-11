@@ -153,8 +153,18 @@ class ReportCommandHandler:
     def cmd_report(self, arg: str) -> str:
         as_json = "--json" in arg
         as_mitre = "--mitre" in arg
+        as_sigma = "--sigma" in arg
+        as_spl = "--spl" in arg
         force = "--force" in arg
         packets, flows, alerts, anomalies = self._facts()
+        from ai.mitre_export import map_findings, sigma_yaml, spl_query
+        from core.tls_fingerprint import fingerprint_packets
+        mapped_mitre = map_findings([*alerts, *anomalies])
+        tls_fingerprints = fingerprint_packets(packets)
+        if as_sigma:
+            return sigma_yaml([*alerts, *anomalies])
+        if as_spl:
+            return spl_query([*alerts, *anomalies])
 
         from core.narrative import build
         narrative = build(packets, flows, alerts, anomalies, max_chars=14_000)
@@ -190,6 +200,8 @@ class ReportCommandHandler:
         if getattr(self.shell, "llm_client", None) is None or \
                 not self.shell.llm_client.is_available():
             payload = self._fallback_report(anomalies)
+            payload["mitre_techniques"] = map_findings([*alerts, *anomalies])
+            payload["tls_fingerprints"] = tls_fingerprints
             _log_call({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "pcap": self._basename(),
@@ -225,6 +237,12 @@ class ReportCommandHandler:
 
         if not payload:
             payload = self._fallback_report(anomalies)
+
+        # Deterministic mappings supplement (and never replace) model output.
+        existing = {item.get("id") for item in payload.get("mitre_techniques") or []}
+        payload["mitre_techniques"] = (payload.get("mitre_techniques") or []) + [
+            item for item in mapped_mitre if item["id"] not in existing]
+        payload["tls_fingerprints"] = tls_fingerprints
 
         if as_json:
             return json.dumps(payload, indent=2, default=str)

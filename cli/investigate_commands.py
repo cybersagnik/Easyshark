@@ -34,6 +34,7 @@ from ai.investigator import (
     _extract_json_obj,
     _fallback_conclusion,
 )
+from core.event_sink import event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,11 @@ class InvestigateCommandHandler:
         )
         if not question:
             question = "Analyze the suspicious activity in this capture."
+        event_bus.publish("investigation_started", {
+            "session": getattr(getattr(self.shell, "session", None), "key", None),
+            "pcap": getattr(self.shell, "pcap_file", None),
+            "question": question,
+        })
         try:
             self.shell._ensure_llm_client()
         except Exception:
@@ -200,6 +206,10 @@ class InvestigateCommandHandler:
         def emit_wrapped(event: str, payload: Dict[str, Any]):
             if state["skip_remaining"] or state["halt"]:
                 return
+            event_bus.publish(event, {
+                "session": getattr(getattr(self.shell, "session", None), "key", None),
+                **payload,
+            })
             emit(event, payload)
             if payload.get("_skip_remaining"):
                 state["skip_remaining"] = True
@@ -357,6 +367,10 @@ class InvestigateCommandHandler:
         runner = DagRunner(llm_client=llm)
 
         def emit(event: str, payload: Dict[str, Any]):
+            event_bus.publish(event, {
+                "session": getattr(getattr(self.shell, "session", None), "key", None),
+                **payload,
+            })
             if event == "hypothesis_start":
                 from cli.status import status
                 status("investigate",

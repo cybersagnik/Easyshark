@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import textwrap
+import tempfile
 from pathlib import Path
 
 
@@ -289,15 +290,22 @@ def _prepare_state_dir() -> Path:
     """Select a writable state directory before importing stateful modules."""
     preferred = Path(os.environ.get(
         "EASYSHARK_STATE_DIR", str(Path.home() / ".easyshark")))
-    try:
-        preferred.mkdir(parents=True, exist_ok=True)
-        probe = preferred / ".write_probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
-        state_dir = preferred
-    except OSError:
-        state_dir = Path.cwd() / ".easyshark"
-        state_dir.mkdir(parents=True, exist_ok=True)
+    candidates = [preferred, Path.cwd() / ".easyshark-runtime",
+                  Path(tempfile.gettempdir()) / "easyshark"]
+    state_dir = None
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            state_dir = candidate
+            break
+        except OSError:
+            continue
+    if state_dir is None:
+        raise RuntimeError("EasyShark could not find a writable state directory")
+    if state_dir != preferred:
         print(f"Warning: using writable local state directory {state_dir}",
               file=sys.stderr)
     os.environ["EASYSHARK_STATE_DIR"] = str(state_dir)
@@ -306,6 +314,7 @@ def _prepare_state_dir() -> Path:
     os.environ.setdefault("EASYSHARK_AUDIT_PATH", str(state_dir / "audit.jsonl"))
     os.environ.setdefault("EASYSHARK_MEMORY_DIR", str(state_dir))
     os.environ.setdefault("EASYSHARK_REPORTS_DIR", str(state_dir / "reports"))
+    os.environ.setdefault("EASYSHARK_EVENT_STORE", str(state_dir / "events.db"))
     return state_dir
 
 
@@ -342,6 +351,10 @@ def main(argv=None):
     parser.add_argument("--threat-feed",
                         help="Local JSON threat-intelligence feed for IOC enrichment")
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
+    parser.add_argument("--web", action="store_true",
+                        help="Start the REST/WebSocket dashboard server")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="Web server port (default: 8000)")
     args = parser.parse_args(argv)
 
     log_dir = _prepare_state_dir()
@@ -356,6 +369,18 @@ def main(argv=None):
 
     from core.session_manager import SessionManager
     mgr = SessionManager()
+
+    if args.web:
+        try:
+            import uvicorn
+            from core.api.server import create_app
+            uvicorn.run(create_app(mgr), host="127.0.0.1", port=args.port,
+                        log_level="debug" if args.debug else "info")
+        except ImportError:
+            print("Web mode requires fastapi and uvicorn; install requirements.txt.",
+                  file=sys.stderr)
+            return 1
+        return 0
 
     if args.monitor:
         from core.daemon import MissionDaemon

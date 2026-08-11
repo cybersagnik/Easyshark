@@ -109,6 +109,9 @@ class MissionDaemon:
             record("alert_failed", error=str(exc), event=event)
 
     def _emit(self, event: str, payload) -> None:
+        # Keep daemon activity visible to an in-process dashboard subscriber.
+        from .event_sink import event_bus
+        event_bus.publish(event, payload)
         if self.event_sink:
             try:
                 self.event_sink.send(event, payload)

@@ -37,6 +37,8 @@ import json
 import os
 import secrets
 import string
+import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -60,6 +62,7 @@ ROLES = ("planner", "explainer", "coder", "critic")
 _KEY_ALPHABET = string.ascii_uppercase + string.digits
 _MAX_TURNS = 30          # conversation is bounded to this many Q/A pairs
 _MAX_TURN_CHARS = 4000   # per message cap before recording
+_SAVE_LOCK = threading.RLock()
 
 
 def _now_iso() -> str:
@@ -145,8 +148,17 @@ class SessionManager:
         failure (never raises)."""
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            self._path(s.key).write_text(
-                json.dumps(asdict(s), indent=2, default=str))
+            target = self._path(s.key)
+            # Replace in one operation so a dashboard never observes a
+            # partially-written session while the CLI is saving a turn.
+            with _SAVE_LOCK:
+                with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", dir=self.dir,
+                    prefix=f".{target.stem}.", suffix=".tmp", delete=False,
+                ) as fh:
+                    json.dump(asdict(s), fh, indent=2, default=str)
+                    temporary = Path(fh.name)
+                temporary.replace(target)
             return True
         except Exception as exc:
             import logging

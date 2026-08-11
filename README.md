@@ -191,6 +191,20 @@ included in benchmark predictions.
 
 ## Commands
 
+### Dashboard and export extensions
+
+Install the web extras with `pip install -r requirements.txt`, then start the
+API/event bus with `python main.py --web --port 8000`. Run the Vite dashboard
+from `ui/` with `npm install` followed by `npm run dev`; its development proxy
+targets the API on port 8000. The dashboard exposes session drill-down,
+evidence graph, live investigation events, and local ROI counters.
+
+The report command also supports deterministic offline exports:
+`report --mitre`, `report --sigma`, and `report --spl`. TLS ClientHello
+fingerprints are available through `core.tls_fingerprint`, and
+`core.anonymizer.Anonymizer` creates safe packet metadata for external model
+calls without changing the original capture.
+
 ```
 ┌─ Commands ──────────────────────────────────────────────────┐
 │ analyze <question>   Ask a forensic question (LLM-powered)  │

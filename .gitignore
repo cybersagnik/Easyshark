@@ -13,3 +13,7 @@ context.md
 .easyshark/
 tmp/coverage_report.md
 tmp/*.jsonl
+plan.md
+PLAN.md
+ui/node_modules/
+ui/dist/

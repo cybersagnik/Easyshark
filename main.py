@@ -315,6 +315,7 @@ def _prepare_state_dir() -> Path:
     os.environ.setdefault("EASYSHARK_MEMORY_DIR", str(state_dir))
     os.environ.setdefault("EASYSHARK_REPORTS_DIR", str(state_dir / "reports"))
     os.environ.setdefault("EASYSHARK_EVENT_STORE", str(state_dir / "events.db"))
+    os.environ.setdefault("EASYSHARK_SOC_DB", str(state_dir / "cysoc.db"))
     return state_dir
 
 
@@ -333,6 +334,9 @@ def main(argv=None):
     parser.add_argument("--no-ai", action="store_true", help="Disable AI features")
     parser.add_argument("--autonomous", action="store_true",
                         help="Run one autonomous investigation and exit")
+    parser.add_argument("--mode", choices=("standard", "soc-analyst"),
+                        default="standard",
+                        help="Autonomous operating mode (default: standard)")
     parser.add_argument("--mission", default="Analyze the suspicious activity in this capture.",
                         help="Mission for --autonomous")
     parser.add_argument("--monitor", metavar="DIR",
@@ -351,10 +355,6 @@ def main(argv=None):
     parser.add_argument("--threat-feed",
                         help="Local JSON threat-intelligence feed for IOC enrichment")
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
-    parser.add_argument("--web", action="store_true",
-                        help="Start the REST/WebSocket dashboard server")
-    parser.add_argument("--port", type=int, default=8000,
-                        help="Web server port (default: 8000)")
     args = parser.parse_args(argv)
 
     log_dir = _prepare_state_dir()
@@ -370,18 +370,6 @@ def main(argv=None):
     from core.session_manager import SessionManager
     mgr = SessionManager()
 
-    if args.web:
-        try:
-            import uvicorn
-            from core.api.server import create_app
-            uvicorn.run(create_app(mgr), host="127.0.0.1", port=args.port,
-                        log_level="debug" if args.debug else "info")
-        except ImportError:
-            print("Web mode requires fastapi and uvicorn; install requirements.txt.",
-                  file=sys.stderr)
-            return 1
-        return 0
-
     if args.monitor:
         from core.daemon import MissionDaemon
         try:
@@ -391,7 +379,8 @@ def main(argv=None):
                           event_log=args.event_log,
                           threat_feed=args.threat_feed,
                           event_webhook=(args.event_webhook or
-                                         os.environ.get("EASYSHARK_EVENT_WEBHOOK"))).run(once=args.once)
+                                         os.environ.get("EASYSHARK_EVENT_WEBHOOK")),
+                          mode=args.mode).run(once=args.once)
         except Exception as exc:
             print(YELLOW + f"⚠ Monitor failed: {exc}" + RESET, file=sys.stderr)
             return 1
@@ -477,8 +466,10 @@ def main(argv=None):
         except Exception as exc:
             print(f"Invalid threat-intelligence feed: {exc}", file=sys.stderr)
             return 2
-        handler = InvestigateCommandHandler(shell, threat_intel=intel)
-        result = handler.handle("autonomous " + mission)
+        handler = InvestigateCommandHandler(shell, threat_intel=intel,
+                                             mode=args.mode)
+        verb = "soc-analyst" if args.mode == "soc-analyst" else "autonomous"
+        result = handler.handle(verb + " " + mission)
         if result:
             print(result, file=sys.stderr)
             return 1

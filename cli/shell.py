@@ -320,13 +320,20 @@ class InteractiveShell:
             return
 
         low = line.lower().lstrip()
+        if low in ("cysoc-terminal", "soc-analyst terminal",
+                   "soc-analyst --terminal"):
+            from .cysoc_terminal import CYSOCTerminal
+            CYSOCTerminal(self).run()
+            return
+
         if low == "capture" or low.startswith("capture "):
             out = self.capture_handler.handle(line)
             if out is not None:
                 print(out)
             return
 
-        if low.startswith("investigate") or low.startswith("autonomous"):
+        if (low.startswith("investigate") or low.startswith("autonomous") or
+                low.startswith("soc-analyst")):
             self._ensure_llm_client()
             handler = InvestigateCommandHandler(self)
             out = handler.handle(line)
@@ -472,6 +479,13 @@ class InteractiveShell:
             ("timeline", "Behavioral timeline (no LLM, <2s)"),
             ("investigate <q>", "Multi-hypothesis investigation"),
             ("autonomous [mission]", "Run a headless investigation and save its report"),
+            ("soc-analyst [mission]", "Autonomous SOC triage, disposition, and response plan"),
+            ("soc-analyst terminal", "Open the nested CYSOC Terminal workspace"),
+            ("update-feeds [provider]", "Update Feodo, URLhaus, or ThreatFox IOC cache"),
+            ("ioc-check <value>", "Check an IOC against the local feed cache"),
+            ("events [limit]", "Recent durable investigation/SOC events"),
+            ("reports", "List saved investigation reports"),
+            ("evidence [index]", "Inspect a saved report evidence graph"),
             ("rule snort|yara|python <desc>", "Generate detection rule"),
             ("list", "List all packets"),
             ("show <idx>", "One-line packet summary"),

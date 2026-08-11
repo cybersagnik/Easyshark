@@ -19,6 +19,7 @@ from ai.tool_registry import ToolContext
 
 from collections import Counter
 from typing import Any, Dict, List, Optional
+import json
 import logging
 import os
 import re
@@ -237,9 +238,13 @@ class TrafficExplainer:
         ('Insufficient data') or the call fails — the caller then falls
         through to the tool-calling loop. Never blocks on a second call.
         """
+        from core.untrusted import envelope
+        trusted_bundle = json.dumps(envelope(
+            bundle, source="deterministic_evidence_bundle", field="evidence",
+            limit=16000), ensure_ascii=False)
         prompt = (
             "Question: " + question + "\n\n"
-            + bundle + "\n\n"
+            + trusted_bundle + "\n\n"
             "Rules:\n"
             "1. Do not write out your reasoning or analysis — think "
             "internally and output only the answer.\n"

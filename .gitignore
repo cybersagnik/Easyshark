@@ -15,5 +15,6 @@ tmp/coverage_report.md
 tmp/*.jsonl
 plan.md
 PLAN.md
+agentcontext/
 ui/node_modules/
 ui/dist/

@@ -18,12 +18,16 @@ class MissionDaemon:
                  webhook: Optional[str] = None, health_port: Optional[int] = None,
                  event_log: Optional[str] = None,
                  threat_feed: Optional[str] = None,
-                 event_webhook: Optional[str] = None):
+                 event_webhook: Optional[str] = None,
+                 mode: str = "standard"):
         if not mission.strip():
             raise ValueError("mission must not be empty")
         self.directory = str(Path(directory).resolve())
         self.mission = mission.strip()
         self.interval = interval
+        if mode not in ("standard", "soc-analyst"):
+            raise ValueError("mode must be standard or soc-analyst")
+        self.mode = mode
         self.stop_event = threading.Event()
         self.queue = JobQueue(queue_path)
         from .threat_intel import ThreatIntel
@@ -82,8 +86,9 @@ class MissionDaemon:
             shell = InteractiveShell(job["path"], enable_ai=True,
                                      session=session, session_manager=manager)
             result = InvestigateCommandHandler(
-                shell, threat_intel=self.threat_intel).handle(
-                "autonomous " + job["mission"])
+                shell, threat_intel=self.threat_intel, mode=self.mode).handle(
+                ("soc-analyst" if self.mode == "soc-analyst" else "autonomous")
+                + " " + job["mission"])
             if result:
                 raise RuntimeError(result)
             manager.save(session)
@@ -120,7 +125,7 @@ class MissionDaemon:
 
     def _health_status(self):
         return {"queue": self.queue.stats(),
-                "stopping": self.stop_event.is_set()}
+                "stopping": self.stop_event.is_set(), "mode": self.mode}
 
     def run(self, once: bool = False) -> None:
         if self.interval <= 0:

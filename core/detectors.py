@@ -795,10 +795,62 @@ def detect_domain_reputation(packets, flows) -> List[Anomaly]:
 
 
 # --------------------------------------------------------------------------- #
+# Detector 9 — encrypted-traffic metadata                                    #
+# --------------------------------------------------------------------------- #
+def detect_encrypted_traffic(packets, flows) -> List[Anomaly]:
+    """Surface suspicious TLS ClientHello metadata without decrypting content."""
+    from core.tls_fingerprint import fingerprint_packets
+    results = fingerprint_packets(packets)
+    out: List[Anomaly] = []
+    missing_sni: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in results:
+        packet_index = int(row["packet"])
+        packet = packets[packet_index]
+        peer = f"{packet.dst_ip or '?'}:{packet.dst_port or '?'}"
+        if not row.get("sni"):
+            missing_sni[peer].append(row)
+    for peer, rows in missing_sni.items():
+        if len(rows) < 3:
+            continue
+        hosts = []
+        for row in rows:
+            src = packets[int(row["packet"])].src_ip
+            if src and src not in hosts:
+                hosts.append(src)
+        out.append(Anomaly(
+            type="tls_fingerprint_anomaly", score=min(.8, .35 + len(rows) / 20),
+            hosts=hosts, remote=peer,
+            evidence=(f"{len(rows)} TLS ClientHello packets without SNI; "
+                      f"JA3={rows[0]['ja3']} JA4={rows[0]['ja4']}"),
+            packets=[int(row["packet"]) for row in rows[:20]],
+        ))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Detector 10 — prompt injection in observed content                         #
+# --------------------------------------------------------------------------- #
+def detect_prompt_injection(packets, flows) -> List[Anomaly]:
+    """Packet text that attempts to control an analyst model is itself a finding."""
+    from core.untrusted import scan_packets
+    out = []
+    for row in scan_packets(packets):
+        out.append(Anomaly(
+            type="prompt_injection_payload", score=.9,
+            hosts=[row["src_ip"]] if row.get("src_ip") else [],
+            remote=str(row.get("dst_ip") or ""),
+            evidence=("Untrusted packet content contains instruction-like text; "
+                      f"packet {row['packet']} was isolated from prompt semantics"),
+            packets=[row["packet"]],
+        ))
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Orchestrator                                                                #
 # --------------------------------------------------------------------------- #
 def run_all(packets, flows) -> List[Anomaly]:
-    """Run all 8 detectors; return merged list sorted by score desc."""
+    """Run deterministic detectors; return merged list sorted by score desc."""
     all_anoms: List[Anomaly] = []
     for fn in (
         detect_beaconing,
@@ -809,6 +861,8 @@ def run_all(packets, flows) -> List[Anomaly]:
         detect_lateral_movement,
         detect_long_connection,
         detect_domain_reputation,
+        detect_encrypted_traffic,
+        detect_prompt_injection,
     ):
         try:
             all_anoms.extend(fn(packets, flows))

@@ -1,0 +1,14 @@
+{
+  "assets": {
+    "10.0.0.10": {
+      "criticality": "critical",
+      "owner": "identity-team",
+      "tags": ["domain-controller", "crown-jewel"]
+    },
+    "FIN-LAPTOP-22": {
+      "criticality": "high",
+      "owner": "finance",
+      "tags": ["regulated"]
+    }
+  }
+}

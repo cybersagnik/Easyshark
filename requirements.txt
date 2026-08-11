@@ -1,7 +1,7 @@
 scapy>=2.5.0
 # Persistent HTTP connection pooling for cloud LLM transports.
 requests>=2.31.0
-# Optional daemon web interface (the standalone CLI does not import these).
+# Optional API compatibility layer (the V2 CLI has no web/dashboard mode).
 fastapi>=0.110.0
 uvicorn>=0.29.0
 # groq is OPTIONAL; the project runs on Ollama by default.

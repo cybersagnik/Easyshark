@@ -21,12 +21,15 @@ def _enabled() -> bool:
     return os.environ.get("EASYSHARK_RSI_ENABLED", "1") != "0"
 
 
-def record_feedback(question: str, accepted: bool) -> int:
+def record_oracle_feedback(question: str, accepted: bool, *,
+                           oracle_kind: str, oracle_run_id: str = "") -> int:
     """Apply an independent analyst label to matching learned patterns.
 
     Returns the number of patterns updated. Labels are deliberately explicit;
     an LLM verdict is not treated as independent feedback.
     """
+    if oracle_kind not in {"corpus", "synthetic", "rederive", "delayed_intel", "cross_path", "analyst_override"}:
+        raise ValueError("feedback source is not an independent oracle")
     if not _enabled() or not question.strip():
         return 0
     from ai import pattern_learner as learner
@@ -44,12 +47,23 @@ def record_feedback(question: str, accepted: bool) -> int:
         row["feedback_total"] = total
         row["feedback_pass"] = passed
         row["feedback_rate"] = round(passed / total, 4)
+        row["last_oracle_kind"] = oracle_kind
+        row["last_oracle_run_id"] = oracle_run_id
         if total >= MIN_FEEDBACK:
             row["status"] = "active" if row["feedback_rate"] >= PROMOTE_RATE else "retired"
         changed += 1
     if changed:
         learner._write_rows(rows)
     return changed
+
+
+def record_feedback(question: str, accepted: bool) -> int:
+    """Compatibility entrypoint: an explicit analyst label is a manual oracle.
+
+    Automatic learning paths never call this function.
+    """
+    return record_oracle_feedback(question, accepted,
+                                  oracle_kind="analyst_override")
 
 
 def status() -> Dict[str, int]:

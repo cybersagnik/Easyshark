@@ -1,0 +1,2 @@
+# Optional remote execution backend. The local process sandbox remains default.
+opensandbox>=0.1.14

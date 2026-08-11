@@ -12,6 +12,8 @@ the extract_files tool) — there is no bulk `export files` verb.
 from __future__ import annotations
 
 import logging
+import json
+import os
 import re
 from pathlib import Path
 from typing import Any, List, Optional
@@ -53,6 +55,11 @@ class CommandHandler:
             "dissect":   self.cmd_dissect,
             "hex":       self.cmd_hex,
             "follow":    self.cmd_follow,
+            "update-feeds": self.cmd_update_feeds,
+            "ioc-check": self.cmd_ioc_check,
+            "events":    self.cmd_events,
+            "reports":   self.cmd_reports,
+            "evidence":  self.cmd_evidence,
             "help":      self.cmd_help,
             "?":         self.cmd_help,
         }
@@ -211,6 +218,87 @@ class CommandHandler:
                 f"{flow.dst_ip}:{flow.dst_port}\n\n"
                 f"{sanitise(text)[:4000]}")
 
+    @staticmethod
+    def _intel_cache() -> Path:
+        return Path(os.environ.get(
+            "EASYSHARK_THREAT_FEED_CACHE",
+            str(Path(os.environ.get("EASYSHARK_STATE_DIR",
+                                    str(Path.home() / ".easyshark"))) / "threat-intel.json")))
+
+    def cmd_update_feeds(self, arg: str) -> str:
+        from core.threat_intel import ThreatIntel
+        providers = [arg.strip().lower()] if arg.strip() else ["feodo"]
+        cache = self._intel_cache()
+        intel = ThreatIntel(str(cache)) if cache.is_file() else ThreatIntel()
+        lines = []
+        for provider in providers:
+            key = os.environ.get(f"EASYSHARK_{provider.upper()}_API_KEY")
+            added = intel.update_provider(provider, key)
+            lines.append(f"{provider}: {added} new")
+        intel.save_file(str(cache))
+        return "Threat feeds updated (" + ", ".join(lines) + f")\nCache: {cache}"
+
+    def cmd_ioc_check(self, arg: str) -> str:
+        value = arg.strip().lower()
+        if not value:
+            return self.fmt.error("ioc-check needs an IP, domain, URL, or hash")
+        from core.threat_intel import ThreatIntel
+        cache = self._intel_cache()
+        if not cache.is_file():
+            return "No threat-intel cache. Run `update-feeds feodo` first."
+        hit = ThreatIntel(str(cache)).lookup(value)
+        if not hit:
+            return f"No IOC match: {value}"
+        tags = ", ".join(str(tag) for tag in hit.get("tags", []) if tag)
+        return (f"IOC MATCH: {value}\n  verdict: {hit.get('verdict', '?')}\n"
+                f"  source: {hit.get('source', '?')}\n  tags: {tags or '(none)'}")
+
+    def cmd_events(self, arg: str) -> str:
+        from core.event_sink import event_bus
+        try:
+            limit = max(1, min(200, int(arg or "20")))
+        except ValueError:
+            return self.fmt.error("events expects an optional numeric limit")
+        rows = event_bus.history()[-limit:]
+        if not rows:
+            return "No investigation events recorded."
+        return "\n".join(
+            f"{row.get('id', '-'):>5}  {row.get('event', '?'):<28} "
+            f"{json.dumps(row.get('payload', {}), default=str)[:160]}"
+            for row in rows)
+
+    @staticmethod
+    def _report_files() -> List[Path]:
+        folder = Path(os.environ.get(
+            "EASYSHARK_REPORTS_DIR",
+            str(Path(os.environ.get("EASYSHARK_STATE_DIR",
+                                    str(Path.home() / ".easyshark"))) / "reports")))
+        return sorted(folder.glob("*.json"), key=lambda path: path.stat().st_mtime,
+                      reverse=True) if folder.is_dir() else []
+
+    def cmd_reports(self, arg: str) -> str:
+        files = self._report_files()
+        if not files:
+            return "No saved investigation reports."
+        return "Saved reports:\n" + "\n".join(
+            f"  {index:>3}  {path.name}" for index, path in enumerate(files[:100]))
+
+    def cmd_evidence(self, arg: str) -> str:
+        files = self._report_files()
+        if not files:
+            return "No saved investigation reports."
+        try:
+            path = files[int(arg.strip() or "0")]
+        except (ValueError, IndexError):
+            return self.fmt.error("evidence expects a report index from `reports`")
+        graph = json.loads(path.read_text(encoding="utf-8")).get("evidence_graph", {})
+        nodes, edges = graph.get("nodes", []), graph.get("edges", [])
+        lines = [f"Evidence graph: {path.name}",
+                 f"  nodes: {len(nodes)}  edges: {len(edges)}"]
+        lines.extend(f"  {node.get('id', '?'):<24} {node.get('kind', '?')}"
+                     for node in nodes[:50])
+        return "\n".join(lines)
+
     def cmd_help(self, arg: str) -> str:
         # L19 — the REPL intercepts `help`/`?` and calls
         # shell._print_help() directly; this dispatch entry is a
@@ -227,8 +315,12 @@ class CommandHandler:
             "  protocols | ips | dns | creds | summary | extract <filename>\n"
             "  anomalies | timeline | report [--json] [--force]\n"
             "  analyze <question> | / <question> | investigate <q>\n"
+            "  autonomous [mission] | soc-analyst [mission]\n"
+            "  soc-analyst terminal | cysoc-terminal\n"
             "  rule snort|yara|python <desc>\n"
             "  capture interfaces | start <iface> | stop | status\n"
             "  sessions | session info | session forget | memory\n"
+            "  update-feeds [provider] | ioc-check <value>\n"
+            "  events [limit] | reports | evidence [report-index]\n"
             "  help | exit\n"
         )

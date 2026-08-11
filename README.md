@@ -177,27 +177,113 @@ Use `--threat-feed ./intel.json` (or `EASYSHARK_THREAT_FEED`) to attach local
 IOC verdicts to autonomous reports. Remote feeds must be loaded by a trusted
 HTTPS-capable integration; the core feed loader rejects non-HTTPS URLs.
 
+For autonomous SOC triage, add `--mode soc-analyst`. This adds case priority,
+disposition, evidence coverage, affected-host scope, IOC context, and an
+approval-gated response plan to the saved report:
+
+```bash
+python3 main.py capture.pcap --autonomous --mode soc-analyst \
+  --mission "Triage, scope, and document suspicious activity"
+```
+
+Inside the shell, use `soc-analyst [mission]`. Feed and operational dashboard
+capabilities are terminal-native through `update-feeds`, `ioc-check`, `events`,
+`reports`, and `evidence`.
+
+### CYSOC Terminal
+
+For the complete SOC analyst and CYSOC operational guide, see
+[`README-CYSOC.md`](README-CYSOC.md).
+
+Open the dedicated SOC workspace from an active capture:
+
+```text
+pcap > soc-analyst terminal
+
+CYSOC TERMINAL  |  SOC investigation workspace
+cysoc > overview
+cysoc > triage Investigate possible command-and-control traffic
+cysoc > case
+cysoc > evidence 0
+cysoc > back
+pcap >
+```
+
+`cysoc-terminal` is a direct alias. The nested terminal reuses every EasyShark
+forensic command and the same safety and approval policies. `exit`, `back`, or
+`quit` returns to the normal shell; it does not terminate EasyShark.
+
+CYSOC also maintains a vendor-neutral SQLite operations store at
+`~/.easyshark/cysoc.db` (override with `EASYSHARK_SOC_DB`). Import JSON or
+JSONL exports from a SIEM, EDR, identity provider, firewall, DNS platform, or
+other telemetry source:
+
+```text
+cysoc > ingest sentinel-alerts.jsonl sentinel
+cysoc > pulse
+cysoc > queue p1,p2
+cysoc > case create P1 Investigate FIN-LAPTOP-22
+cysoc > case link CYSOC-20260812-AB12 sentinel:alert-1842
+cysoc > case assign CYSOC-20260812-AB12 sahil
+cysoc > correlate FIN-LAPTOP-22
+cysoc > hunt bad.example
+cysoc > detections
+cysoc > action request CYSOC-20260812-AB12 Isolate FIN-LAPTOP-22
+cysoc > action approve 1 soc-lead
+cysoc > benchmark generate .easyshark/synthetic-corpus
+cysoc > benchmark corpus .easyshark/synthetic-corpus/manifest.json
+cysoc > oracle
+cysoc > oracle rederive .easyshark/reports/case.json
+cysoc > baseline check FIN-LAPTOP-22 bytes_out 5000000
+cysoc > similar CYSOC-20260812-AB12
+cysoc > campaign build CYSOC-20260812-AB12
+cysoc > response local CYSOC-20260812-AB12 watchlist bad.example 3600
+```
+
+Approval records never execute external changes by themselves. Execution stays
+disabled until a separately authenticated response connector is configured.
+Autonomous `soc-analyst` reports are automatically registered as durable cases,
+including priority, disposition, evidence graph, review status, and response
+recommendations. Oracle outcomes are stored separately in `~/.easyshark/oracle.db`.
+Corpus runs report precision, recall, Brier score, and expected calibration error;
+the repository does not claim production targets until a representative labelled
+corpus has actually been run. Packet bytes remain local during all oracle runs.
+
+`response local` is limited to expiring tags, watchlists, and snapshots. Isolation,
+blocking, account changes, notifications, and other external actions remain approval
+gated and require a separately authenticated connector. Packet/tool content is
+serialized as untrusted observation data; instruction-like payloads are reported as
+findings and are blocked from the response path.
+
+Generated Python analysis runs in the local isolated process by default.
+To use OpenSandbox, install `requirements-opensandbox.txt`, configure
+`OPEN_SANDBOX_DOMAIN`, `OPEN_SANDBOX_PROTOCOL`, and `OPEN_SANDBOX_API_KEY`, then
+set `EASYSHARK_SANDBOX_BACKEND=opensandbox`. `auto` uses OpenSandbox when it is
+configured and otherwise safely falls back to the local process sandbox. The
+remote sandbox is resource-limited, has deny-by-default egress, and is destroyed
+after each execution.
+
 The monitor requires HTTPS webhooks by default. Set
 `EASYSHARK_ALLOW_HTTP_WEBHOOK=1` only for a trusted local test endpoint.
 
 GitHub Actions runs the Python test suite and builds the Docker image on every
 push and pull request.
 
-Labelled RSI cases can be scored with `ai.benchmark.score`; cases are JSONL
-records containing `question` and `expected_tools`. Only `active` patterns are
-included in benchmark predictions.
+Legacy labelled tool-routing cases can be scored with `ai.benchmark.score`. Automatic
+RSI promotion and prompt distillation consume only independent outcomes from the
+corpus, synthetic, re-derivation, delayed-intel, or cross-path oracles. The critic is
+an in-run quality gate and is never a cross-run fitness signal.
 
 ---
 
 ## Commands
 
-### Dashboard and export extensions
+### Terminal operations and export extensions
 
-Install the web extras with `pip install -r requirements.txt`, then start the
-API/event bus with `python main.py --web --port 8000`. Run the Vite dashboard
-from `ui/` with `npm install` followed by `npm run dev`; its development proxy
-targets the API on port 8000. The dashboard exposes session drill-down,
-evidence graph, live investigation events, and local ROI counters.
+V2 is terminal-native. Use `sessions`, `events`, `reports`, and `evidence` for
+session drill-down, live/durable activity, saved investigations, and evidence
+graphs. The Vite dashboard is maintained separately in the sibling V3 tree and
+is not duplicated in V2.
 
 The report command also supports deterministic offline exports:
 `report --mitre`, `report --sigma`, and `report --spl`. TLS ClientHello
@@ -241,7 +327,7 @@ calls without changing the original capture.
 
 ## Project Status
 
-⚠ **Early developmental stage.** EasyShark is functional and passes regression on labelled PCAPs (198 tests, all passing), but you may encounter:
+⚠ **Early developmental stage.** EasyShark is functional and currently passes 115 automated tests, but you may encounter:
 
 - **Hallucinated answers** — the LLM can sometimes invent evidence. The claim-grounding pass and hallucination detector flag these, but they are not foolproof.
 - **Tool-loop failures** — free-tier models can timeout or return malformed responses. The tool loop retries once then falls back to a dissection-aware summary.

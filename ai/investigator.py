@@ -182,6 +182,9 @@ class Hypothesis:
     evidence_found:     List[str]     = field(default_factory=list)
     confidence_after:   Optional[str] = None
     reasoning:          str           = ""
+    numeric_confidence: Optional[float] = None
+    critic_approved:    Optional[bool] = None
+    calibrated_confidence: Optional[float] = None
 
 
 @dataclass
@@ -299,8 +302,12 @@ def investigate(shell, on_event: Optional[Callable[[str, Dict[str, Any]], None]]
     # Step 2 — Hypothesis generation (LLM call 1).                        #
     # ------------------------------------------------------------------ #
     llm = getattr(shell, "llm_client", None)
+    from core.untrusted import envelope
     raw = _single_completion(
-        llm, HYPOTHESIS_SYSTEM_PROMPT, narrative, max_tokens=1500,
+        llm, HYPOTHESIS_SYSTEM_PROMPT,
+        json.dumps(envelope(narrative, source="deterministic_capture_narrative",
+                            field="narrative", limit=12000)),
+        max_tokens=1500,
     )
     if raw:
         parsed = _extract_json_array(raw) or []

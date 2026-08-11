@@ -181,14 +181,15 @@ def distill(verdicts: List[Dict[str, Any]],
     if not verdicts:
         return None
     verdict_lines = [
-        (f"- hypothesis: {v.get('hypothesis') or ''}\n"
-         f"  verdict: {v.get('verdict') or ''} "
+        (f"- question: {v.get('question') or ''}\n"
+         f"  oracle: {v.get('oracle_kind') or ''} "
+         f"expected={bool(v.get('expected'))} predicted={bool(v.get('predicted'))} "
          f"(confidence {v.get('confidence') or 0.0})\n"
-         f"  tools: {v.get('tools_used') or ''}\n"
-         f"  evidence: {(v.get('evidence') or '')[:200]}")
+         f"  tools: {', '.join(v.get('tools') or [])}\n"
+         f"  evidence: {str(v.get('evidence') or '')[:200]}")
         for v in verdicts
     ]
-    user = ("Critic-approved verdicts to distill:\n"
+    user = ("Independent oracle outcomes to distill:\n"
             + "\n".join(verdict_lines)
             + "\n\nProduce the JSON pattern object.")
     from ai.investigator import _single_completion, _extract_json_obj
@@ -244,14 +245,14 @@ def maybe_distill(llm_client, force: bool = False,
                          time.strftime("%Y-%m-%d", time.gmtime(last)))
             return None
     try:
-        from core import memory
-        verdicts = memory.approved_verdicts(n=DISTILL_VERDICT_LIMIT,
-                                            db_path=db_path)
+        from ai.oracle import OracleStore
+        verdicts = OracleStore(str(db_path) if db_path else None).training_examples(
+            DISTILL_VERDICT_LIMIT)
     except Exception as exc:
-        logger.warning("distiller: verdict read failed: %s", exc)
+        logger.warning("distiller: oracle read failed: %s", exc)
         return None
     if not verdicts:
-        logger.debug("distiller: no approved verdicts to learn from")
+        logger.debug("distiller: no independent oracle outcomes to learn from")
         return None
     pats = distill(verdicts, llm_client)
     if not pats:

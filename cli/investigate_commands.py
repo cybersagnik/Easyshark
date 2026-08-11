@@ -55,10 +55,65 @@ def _live(text: str = "") -> None:
 class InvestigateCommandHandler:
     """Mirrors cli.commands.CommandHandler interface."""
 
-    def __init__(self, shell, threat_intel=None):
+    def __init__(self, shell, threat_intel=None, mode: str = "standard"):
         self.shell = shell
         self.fmt = OutputFormatter()
         self.threat_intel = threat_intel
+        self.mode = mode
+
+    def _apply_soc_assessment(self, report: InvestigationReport,
+                              evidence_graph) -> None:
+        if self.mode != "soc-analyst":
+            return
+        alerts = []
+        for rule in getattr(self.shell, "rules", []) or []:
+            alerts.extend(rule.get_alerts())
+        from ai.soc_analyst import AutonomousSOCAnalyst
+        assessment = AutonomousSOCAnalyst().assess(
+            report, alerts=alerts, evidence_graph=evidence_graph)
+        try:
+            from core.detectors import run_all
+            from ai.oracle import cross_path_score
+            deterministic = {item.type for item in run_all(
+                self.shell.get_packets(), self.shell.flow_engine.get_all_flows())}
+            hypothesis_text = " ".join(
+                f"{h.name} {h.description} {' '.join(h.evidence_found)}".lower()
+                for h in report.hypotheses if h.verdict in ("confirmed", "weakened"))
+            agreed = {kind for kind in deterministic
+                      if all(token in hypothesis_text
+                             for token in kind.replace("_", " ").split())}
+            assessment["cross_path_oracle"] = cross_path_score(deterministic, agreed)
+        except Exception as exc:
+            assessment["warnings"].append(f"cross-path oracle unavailable: {exc}")
+        # Compare before learning this capture so the current activity cannot
+        # normalize itself. Defaults stay unchanged until five local samples.
+        try:
+            from core.soc_store import SOCStore
+            from core.soc_learning import SOCLearningStore
+            learning = SOCLearningStore(str(SOCStore().path))
+            deviations = []
+            for flow in self.shell.flow_engine.get_all_flows():
+                entity = str(getattr(flow, "src_ip", "") or "")
+                if not entity:
+                    continue
+                for feature, value in (("flow_bytes", float(getattr(flow, "total_bytes", 0))),
+                                       ("flow_duration", float(getattr(flow, "duration", 0)))):
+                    result = learning.deviation(entity, feature, value,
+                                                getattr(flow, "start_ts", None))
+                    if result.get("anomalous"):
+                        deviations.append({"entity": entity, "feature": feature,
+                                           "value": value, **result})
+                    learning.observe(entity, feature, value,
+                                     getattr(flow, "start_ts", None))
+            assessment["behavioral_deviations"] = deviations
+        except Exception as exc:
+            assessment["warnings"].append(f"behavioral baseline unavailable: {exc}")
+        report.conclusion["soc_assessment"] = assessment
+        event_bus.publish("soc_case_completed", {
+            "session": getattr(getattr(self.shell, "session", None), "key", None),
+            "pcap": getattr(self.shell, "pcap_file", None),
+            **assessment,
+        })
 
     def _enrich_report(self, report: InvestigationReport) -> None:
         """Attach feed matches without letting enrichment change verdicts."""
@@ -78,13 +133,15 @@ class InvestigateCommandHandler:
             return None
         parts = line.split(None, 1)
         verb = parts[0].lower()
-        if verb not in ("investigate", "autonomous"):
+        if verb not in ("investigate", "autonomous", "soc-analyst"):
             return self.fmt.error(f"unknown command: {verb}")
         arg = (parts[1] if len(parts) > 1 else "").strip()
         # `autonomous` is the non-interactive alias; keep `investigate`'s
         # existing engine and flags so there is only one agent path.
-        auto = verb == "autonomous" or "--auto" in arg
-        linear = verb != "autonomous" and "--linear" in arg
+        if verb == "soc-analyst":
+            self.mode = "soc-analyst"
+        auto = verb in ("autonomous", "soc-analyst") or "--auto" in arg
+        linear = verb not in ("autonomous", "soc-analyst") and "--linear" in arg
         question = " ".join(
             tok for tok in arg.split() if tok not in ("--auto", "--linear")
         )
@@ -95,6 +152,12 @@ class InvestigateCommandHandler:
             "pcap": getattr(self.shell, "pcap_file", None),
             "question": question,
         })
+        if self.mode == "soc-analyst":
+            event_bus.publish("soc_case_started", {
+                "session": getattr(getattr(self.shell, "session", None), "key", None),
+                "pcap": getattr(self.shell, "pcap_file", None),
+                "question": question,
+            })
         try:
             self.shell._ensure_llm_client()
         except Exception:
@@ -228,6 +291,20 @@ class InvestigateCommandHandler:
         report = investigate(self.shell, on_event=emit_wrapped)
         self._enrich_report(report)
 
+        packets = self.shell.get_packets()
+        flows = self.shell.flow_engine.get_all_flows()
+        alerts = []
+        for rule in getattr(self.shell, "rules", []) or []:
+            alerts.extend(rule.get_alerts())
+        from ai.evidence_graph import from_capture, references_from_evidence
+        evidence_graph = from_capture(packets, flows, alerts)
+        for index, hypothesis in enumerate(report.hypotheses, 1):
+            references = references_from_evidence(
+                list(hypothesis.supporting_evidence or []) +
+                list(hypothesis.evidence_found or []))
+            evidence_graph.claim(f"hypothesis:{index}", hypothesis.name, references)
+        self._apply_soc_assessment(report, evidence_graph)
+
         # In interactive skip-this path, post-process: convert declines
         # into ruled_out entries. (Best-effort: mark the most recent
         # pending hypothesis as ruled_out if its verdict is None.)
@@ -270,7 +347,8 @@ class InvestigateCommandHandler:
             _live(f"> {response}")
             if response in ("y", "yes"):
                 try:
-                    path = _save_report(report, self.shell.pcap_file)
+                    path = _save_report(report, self.shell.pcap_file,
+                                        evidence_graph=evidence_graph)
                     _live(f"Report saved to {path}")
                 except Exception as exc:
                     _live(f"Save failed: {exc}")
@@ -279,7 +357,8 @@ class InvestigateCommandHandler:
             # for input.  This is a local write only; no external action is
             # taken automatically.
             try:
-                path = _save_report(report, self.shell.pcap_file)
+                path = _save_report(report, self.shell.pcap_file,
+                                    evidence_graph=evidence_graph)
                 _live(f"Report saved to {path}")
             except Exception as exc:
                 logger.warning("autonomous report save failed: %s", exc)
@@ -478,6 +557,8 @@ class InvestigateCommandHandler:
                     evidence_found=h.evidence,
                     confidence_after=_conf_label(h.confidence),
                     reasoning=h.reasoning,
+                    numeric_confidence=h.confidence,
+                    critic_approved=h.critic_approved,
                 )
                 for h in dag.hypotheses
             ],
@@ -488,6 +569,7 @@ class InvestigateCommandHandler:
         if not report.conclusion:
             report.conclusion = _fallback_conclusion(report)
         self._enrich_report(report)
+        self._apply_soc_assessment(report, evidence_graph)
 
         _live("─" * 67)
         _live("INVESTIGATION COMPLETE")
@@ -639,6 +721,9 @@ def _save_report(report: InvestigationReport, pcap_path: str,
                 "evidence_found":    h.evidence_found,
                 "confidence_after":  h.confidence_after,
                 "reasoning":         h.reasoning,
+                "numeric_confidence": h.numeric_confidence,
+                "critic_approved":   h.critic_approved,
+                "calibrated_confidence": h.calibrated_confidence,
             }
             for h in report.hypotheses
         ],
@@ -646,4 +731,12 @@ def _save_report(report: InvestigationReport, pcap_path: str,
         "evidence_graph": evidence_graph.as_dict() if hasattr(evidence_graph, "as_dict") else (evidence_graph or {}),
     }
     out_path.write_text(json.dumps(blob, indent=2, default=str))
+    if report.conclusion.get("soc_assessment"):
+        try:
+            from core.soc_store import SOCStore
+            case_id = SOCStore().ingest_easyshark_report(str(out_path))
+            event_bus.publish("soc_case_persisted", {
+                "case_id": case_id, "report": str(out_path), "pcap": pcap_path})
+        except Exception as exc:
+            logger.warning("SOC case persistence failed: %s", exc)
     return str(out_path)

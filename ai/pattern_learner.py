@@ -204,36 +204,36 @@ def _verdict_success(verdict: str, critic_approved: bool) -> float:
     return 0.0
 
 
-def learn_from_verdicts(n: int = 50,
-                        db_path: Optional[Path] = None) -> int:
-    """Pull the latest critic-approved verdicts from the memory DB and merge
-    them into the pattern store. Returns how many were merged (best-effort).
-    ``db_path`` is passed through to the memory layer for hermetic tests.
-    """
+def learn_from_oracles(n: int = 50,
+                       db_path: Optional[Path] = None) -> int:
+    """Learn only from independent oracle outcomes, never critic verdicts."""
     if not _ENABLED:
         return 0
     try:
-        from core import memory
-        verdicts = memory.approved_verdicts(n=n, db_path=db_path)
+        from ai.oracle import OracleStore
+        verdicts = OracleStore(str(db_path) if db_path else None).training_examples(n)
     except Exception as exc:
-        logger.warning("learn_from_verdicts: memory read failed: %s", exc)
+        logger.warning("learn_from_oracles: oracle read failed: %s", exc)
         return 0
     merged = 0
     for v in verdicts:
-        tools = [t.strip() for t in str(v.get("tools_used") or "").split(",")
-                 if t.strip()]
+        tools = [str(t).strip() for t in (v.get("tools") or []) if str(t).strip()]
         if not tools:
             continue
-        success = _verdict_success(v.get("verdict", ""),
-                                   bool(v.get("critic_approved")))
+        success = 1.0 if bool(v.get("expected")) == bool(v.get("predicted")) else 0.0
         update_patterns(
-            question=v.get("hypothesis") or "",
+            question=v.get("question") or "",
             tools_used=tools,
             success=success,
             confidence=float(v.get("confidence") or 0.0),
         )
         merged += 1
     return merged
+
+
+def learn_from_verdicts(n: int = 50, db_path: Optional[Path] = None) -> int:
+    """Deprecated compatibility name; now reads the oracle store."""
+    return learn_from_oracles(n=n, db_path=db_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -298,7 +298,7 @@ def learn_in_background(n: int = 50) -> None:
     if not _ENABLED:
         return
     try:
-        t = threading.Thread(target=learn_from_verdicts, args=(n,),
+        t = threading.Thread(target=learn_from_oracles, args=(n,),
                              name="pattern-learner", daemon=True)
         t.start()
     except Exception as exc:

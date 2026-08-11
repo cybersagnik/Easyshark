@@ -5,8 +5,7 @@ import os
 import json
 import urllib.error
 import urllib.request
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from core.event_sink import JsonlSink, WebhookSink
 from core.health import HealthServer
 from ai.investigator import InvestigationReport
 from cli.investigate_commands import InvestigateCommandHandler
+from cli.commands import CommandHandler
 
 
 class TestSafetyAndMonitoring(unittest.TestCase):
@@ -110,47 +110,29 @@ class TestSafetyAndMonitoring(unittest.TestCase):
 
     def test_webhook_failure_is_drained_after_recovery(self):
         calls = []
-        state = {"ok": False}
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-            def do_POST(self):
-                calls.append(self.path)
-                if not state["ok"]:
-                    self.send_response(503)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                self.send_response(200)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-            def log_message(self, *_args):
-                return
-        http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=http.serve_forever, daemon=True)
-        thread.start()
-        old_http = os.environ.get("EASYSHARK_ALLOW_HTTP_WEBHOOK")
-        os.environ["EASYSHARK_ALLOW_HTTP_WEBHOOK"] = "1"
-        try:
-            with tempfile.TemporaryDirectory() as folder:
-                outbox = str(Path(folder) / "outbox.db")
-                from core.monitor import WebhookAlerter
-                url = f"http://127.0.0.1:{http.server_port}/events"
-                alerter = WebhookAlerter(url, retries=0, outbox_path=outbox,
-                                         approved=True)
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+        def fake_urlopen(_request, timeout=None):
+            calls.append(timeout)
+            if len(calls) == 1:
+                raise RuntimeError("temporary delivery failure")
+            return Response()
+        with tempfile.TemporaryDirectory() as folder:
+            outbox = str(Path(folder) / "outbox.db")
+            from core.monitor import WebhookAlerter
+            alerter = WebhookAlerter("https://example.invalid/events", retries=0,
+                                     outbox_path=outbox, approved=True)
+            with patch("core.monitor.urllib.request.urlopen", fake_urlopen):
                 with self.assertRaises(RuntimeError):
                     alerter.send({"event": "mission_failed"})
                 self.assertEqual(len(alerter.outbox.pending()), 1)
-                state["ok"] = True
                 self.assertEqual(alerter.drain(), 1)
                 self.assertEqual(alerter.outbox.pending(), [])
-                self.assertGreaterEqual(len(calls), 2)
-        finally:
-            if old_http is None:
-                os.environ.pop("EASYSHARK_ALLOW_HTTP_WEBHOOK", None)
-            else:
-                os.environ["EASYSHARK_ALLOW_HTTP_WEBHOOK"] = old_http
-            http.shutdown()
-            http.server_close()
+                self.assertEqual(len(calls), 2)
 
     def test_job_queue_is_durable_and_retries(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -180,6 +162,109 @@ class TestSafetyAndMonitoring(unittest.TestCase):
             out = root / "events.jsonl"
             JsonlSink(str(out)).send("test", {"ok": True})
             self.assertIn('"schema": "easyshark.event.v1"', out.read_text(encoding="utf-8"))
+
+    def test_threat_intel_provider_normalization_and_persistence(self):
+        intel = ThreatIntel()
+        responses = [
+            [{"ip_address": "1.2.3.4", "port": 443,
+              "malware": "QakBot", "status": "online"}],
+            {"urls": [{"url": "https://bad.example/drop", "threat": "malware",
+                       "tags": "elf, loader"}]},
+            {"query_status": "ok", "data": [{
+                "ioc": "5.6.7.8:8443", "threat_type": "botnet_cc",
+                "malware": "win.test", "tags": ["c2"]}]},
+        ]
+        with patch.object(intel, "_request_json", side_effect=responses):
+            self.assertEqual(intel.update_provider("feodo"), 1)
+            self.assertEqual(intel.update_provider("urlhaus", "key"), 2)
+            self.assertEqual(intel.update_provider("threatfox", "key"), 2)
+        self.assertEqual(intel.lookup("1.2.3.4")["source"], "feodo")
+        self.assertEqual(intel.lookup("bad.example")["source"], "urlhaus")
+        self.assertEqual(intel.lookup("5.6.7.8")["source"], "threatfox")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "intel.json"
+            self.assertEqual(intel.save_file(str(path)), 5)
+            self.assertEqual(ThreatIntel(str(path)).lookup("bad.example")["verdict"],
+                             "malicious")
+
+    def test_terminal_feed_update_and_ioc_check(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder) / "intel.json"
+            handler = CommandHandler(SimpleNamespace())
+            with patch.dict(os.environ,
+                            {"EASYSHARK_THREAT_FEED_CACHE": str(cache)}, clear=False), \
+                    patch.object(ThreatIntel, "_request_json", return_value=[{
+                        "ip_address": "9.8.7.6", "port": 443,
+                        "malware": "QakBot", "status": "online",
+                    }]):
+                updated = handler.handle("update-feeds feodo")
+                match = handler.handle("ioc-check 9.8.7.6")
+            self.assertIn("feodo: 1 new", updated)
+            self.assertTrue(cache.is_file())
+            self.assertIn("IOC MATCH: 9.8.7.6", match)
+
+    def test_linear_autonomous_report_contains_evidence_graph(self):
+        from ai.investigator import Hypothesis
+        import cli.investigate_commands as commands
+        report = InvestigationReport(
+            narrative="packet 0 was suspicious",
+            hypotheses=[Hypothesis(
+                name="Beacon", description="Periodic traffic", confidence="high",
+                evidence_found=["packet 0 observed"], verdict="confirmed",
+                confidence_after="high", reasoning="packet 0 supports it")],
+            conclusion={"incident_narrative": "Beaconing observed.",
+                        "suspect_hosts": [], "mitre_techniques": [],
+                        "iocs": [], "next_steps": []})
+        packet = SimpleNamespace(protocol="TCP", flow_key=None, src_ip="10.0.0.1",
+                                 dst_ip="10.0.0.2", timestamp=1.0)
+        shell = SimpleNamespace(
+            pcap_file="capture.pcap", get_packets=lambda: [packet],
+            flow_engine=SimpleNamespace(get_all_flows=lambda: []), rules=[],
+            llm_client=None)
+        handler = InvestigateCommandHandler(shell)
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(commands, "REPORTS_DIR", Path(folder)), \
+                patch.object(commands, "investigate", return_value=report), \
+                patch("builtins.print"):
+            handler._run_linear(auto=True)
+            saved = json.loads(next(Path(folder).glob("*.json")).read_text(encoding="utf-8"))
+        graph = saved["evidence_graph"]
+        self.assertTrue(graph["nodes"])
+        self.assertIn("hypothesis:1", {node["id"] for node in graph["nodes"]})
+        self.assertTrue(graph["edges"])
+
+    def test_soc_analyst_assessment_is_actionable_and_approval_gated(self):
+        from ai.investigator import Hypothesis
+        from ai.soc_analyst import AutonomousSOCAnalyst
+        graph = EvidenceGraph()
+        graph.node("packet:0", "packet", src_ip="10.0.0.1")
+        graph.claim("hypothesis:1", "Beacon", ["packet:0"])
+        report = InvestigationReport(
+            narrative="packet 0 beaconed",
+            hypotheses=[Hypothesis(
+                name="Beacon", description="Periodic traffic", confidence="high",
+                evidence_found=["packet 0"], verdict="confirmed")],
+            conclusion={"suspect_hosts": [{"ip": "10.0.0.1"}],
+                        "iocs": ["bad.example"]})
+        assessment = AutonomousSOCAnalyst().assess(
+            report, alerts=[SimpleNamespace(severity="high")],
+            evidence_graph=graph)
+        self.assertEqual(assessment["priority"], "P2")
+        self.assertEqual(assessment["disposition"], "confirmed_incident")
+        self.assertEqual(assessment["evidence_coverage"], 1.0)
+        disruptive = [action for action in assessment["recommended_actions"]
+                      if "Isolate" in action["action"] or "Block" in action["action"]]
+        self.assertTrue(disruptive)
+        self.assertTrue(all(action["approval_required"] for action in disruptive))
+
+    def test_sandbox_auto_mode_falls_back_to_local_process(self):
+        from ai.sandbox import run
+        with patch.dict(os.environ, {"EASYSHARK_SANDBOX_BACKEND": "auto"},
+                        clear=False):
+            os.environ.pop("OPEN_SANDBOX_DOMAIN", None)
+            result = run("result = sum(values)", {"values": [2, 3]})
+        self.assertEqual(result["result"], 5)
+        self.assertEqual(result["sandbox_backend"], "local-process")
 
     def test_webhook_event_sink_wraps_versioned_envelope(self):
         sent = []

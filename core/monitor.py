@@ -35,7 +35,7 @@ class WebhookAlerter:
         event_id = json.dumps(event, sort_keys=True, default=str)
         if event_id in self._sent:
             return
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "Connection": "close"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
         last = None

@@ -13,22 +13,22 @@
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⡄⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⣿⣿⣿⣦⡀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⣿⣿⡿⠿⢿⣿⣷⡀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣾⡿⠿⠛⠉⠀⠀⠀⣻⣿⡇
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⡇
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⣿⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣾⣿⣿⣿⠇
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⣿⣿⣿⣿⣿⣿⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣶⣶⣶⣿⣿⣿⣿⣿⠏⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣤⣤⣤⣤⣶⣶⣶⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣾⡿⠿⠛⠉⠀⠀⠀⣻⣿⡇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⡇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⣿⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣾⣿⣿⣿⠇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⣿⣿⣿⣿⣿⣿⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣶⣶⣶⣿⣿⣿⣿⣿⠏⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣤⣤⣤⣤⣶⣶⣶⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀
 ⠀⠀⠀⢀⣀⣀⣀⣀⣀⣤⣤⣴⣶⣶⣶⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠋⠀⠀⠀
 ⠲⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠛⠁⠀⠀⠀⠀⠀⠀
 ⠀⠀⠉⠛⠿⣿⣿⣿⣿⣿⣏⣨⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠈⠋⢉⣉⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠉⠉⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠘⠛⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠿⠛⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠙⠛⠿⠿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⠟⠻⣿⣿⣿⣿⣿⣿⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⠋⠀⠀⠀⠙⠿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⠃⠀⠀⠀⠀⠀⠀⠀⠉⠛⠿⢿⣿⣷⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠻⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠈⠋⢉⣉⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠉⠉⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠘⠛⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠿⠛⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠙⠛⠿⠿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⠟⠻⣿⣿⣿⣿⣿⣿⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⠋⠀⠀⠀⠙⠿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⠃⠀⠀⠀⠀⠀⠀⠀⠉⠛⠿⢿⣿⣷⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠻⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 </pre>
 </p>
 <p align="center">
@@ -39,6 +39,7 @@
 </p>
 
 **Authors:** Sagnik Ray, Suraj Mishra, Md Sahil Molla
+
 ---
 
 Wireshark, for decades, has been the best traditional tool for network analysis. It is essential for learning networking fundamentals and conducting serious packet-level forensics. But when the workload gets heavier — triaging multiple captures under time pressure, hunting for specific Indicators of Compromise (IOCs) across thousands of packets, or correlating events across protocols — navigating through Wireshark's filters, streams, and menus can turn into a nightmare.
@@ -57,26 +58,91 @@ EasyShark is built for exactly those scenarios. It is a **terminal-native, natur
 | Build a timeline by inspecting packets | `investigate` generates hypotheses and verifies them |
 | No LLM integration | Deterministic dissector + cloud LLM for reasoning |
 
-No GUI. No cloud dependency for core analysis. Just packets and prompts.
+No GUI. No local model daemon. Just packets and prompts.
 
 ---
 
-## Agentic Overview
+## Architecture Overview
 
 ```mermaid
-graph LR
-    A[PCAP File / Live Capture] --> B[Dissector<br/>load-time extraction]
-    B --> C[Tool Registry<br/>22 tools gated by triage]
-    C --> D[Analyzer Question]
-    D --> E[LLM Tool Loop<br/>Zen → OpenRouter → Groq]
-    E --> F[Answer + Claim Grounding]
+graph TB
+    subgraph Input["Input Layer"]
+        A[PCAP File] --> B[Live Capture<br/>dumpcap / tcpdump]
+        A --> C[Synthetic Corpus<br/>generated fixtures]
+    end
+
+    subgraph Core["Core Processing"]
+        B --> D[Packet Loader<br/>scapy]
+        C --> D
+        D --> E[Dissector<br/>load-time extraction]
+        E --> F[Triage Layer<br/>protocol capability flags]
+        E --> G[Detectors<br/>8 anomaly detectors]
+        F --> H[Flow Engine<br/>+ Stats Engine]
+        G --> I[Narrative Builder<br/>semantic compression]
+        H --> I
+    end
+
+    subgraph Tools["Tool Registry"]
+        F --> J{Tool Gate<br/>triage-filtered}
+        J --> K[22 Forensic Tools<br/>deterministic]
+        J --> L[python_eval<br/>sandboxed compute]
+        J --> M[extract_embedded_media<br/>host-side extraction]
+        J --> N[create_tool<br/>LLM-defined tools]
+    end
+
+    subgraph LLM["LLM Layer — Cloud Only"]
+        O[analyze question] --> P[Premise Gate<br/>deterministic refuse]
+        P --> Q[LLM Tool Loop<br/>up to 6 steps]
+        Q --> R[Claim Grounding<br/>+ Hallucination Check]
+        R --> S[Boxed Answer<br/>with source attribution]
+        Q -->|Zen 429| T[OpenRouter fallback]
+        T -->|429| U[Groq last resort]
+        Q -->|tools| K
+        Q -->|tools| L
+        Q -->|tools| M
+        Q -->|tools| N
+    end
+
+    subgraph Agentic["Agentic Layer"]
+        I --> V[Investigate<br/>hypothesis DAG]
+        V --> W[Critic<br/>within-run verification]
+        W --> X[Auto-Analyst<br/>single LLM synthesis]
+        X --> Y[SOC Assessment<br/>P1-P4 priority + IOCs]
+        Y --> Z[CYSOC Case<br/>durable SQLite store]
+    end
+
+    subgraph Sandbox["Sandbox Layer"]
+        L --> L1[In-Process<br/>restricted Python]
+        L --> L2[OpenSandbox<br/>Docker container]
+        L1 -->|EASYSHARK_SANDBOX_BACKEND| L2
+        L2 -->|egress denied| L3[Isolated FS<br/>no host bridge]
+    end
+
+    subgraph CYSOC["CYSOC Terminal"]
+        Z --> C1[Alert Queue<br/>ack / close / FP]
+        Z --> C2[Cases<br/>create / assign / timeline]
+        Z --> C3[Hunt + Correlate<br/>+ Fuse + Similar]
+        Z --> C4[Baselines<br/>behavioral anomaly]
+        Z --> C5[Response<br/>local + approval-gated]
+        Z --> C6[Oracle<br/>precision / recall / ECE]
+        Z --> C7[Threat Intel<br/>Feodo + URLhaus + ThreatFox]
+    end
+
+    subgraph Storage["Storage"]
+        Z --> S1["~/.easyshark/<br/>cysoc.db"]
+        C6 --> S2["~/.easyshark/<br/>oracle.db"]
+        X --> S3["~/.easyshark/<br/>reports/"]
+        L --> S4["~/.easyshark/<br/>python_eval.log"]
+    end
 ```
 
-The shell exposes 8 deterministic info commands (`protocols`, `ips`, `flows`, `files`, `dns`, `creds`, `summary`, `extract`) and 3 AI-powered commands (`analyze`, `investigate` with `--auto`, `rule`). The LLM tool loop uses a 3-provider fallback chain — Zen (primary) → OpenRouter (secondary) → Groq (last resort) — all via free-tier models. No local model is required.
+The shell exposes deterministic info commands (`protocols`, `ips`, `flows`, `files`, `dns`, `creds`, `summary`, `extract-media`) and AI-powered commands (`analyze`, `investigate`, `report`, `soc-analyst`). The LLM tool loop uses a 3-provider cloud fallback chain — Zen (primary) → OpenRouter (secondary) → Groq (last resort). No local model is required or supported.
 
 ---
 
-## Quick Start
+## Commands
+
+### Quick Start
 
 ```bash
 # Install dependencies
@@ -90,215 +156,15 @@ cp .env.example .env
 python3 main.py PCAP_SAMPLES/evidence01.pcap
 ```
 
-### Sample PCAPs
-
-The repository ships with labelled and unlabelled captures in `PCAP_SAMPLES/`:
-
-| File | Description | Size |
-|---|---|---|
-| `evidence01.pcap` | AIM file transfer (240 packets) | Labelled |
-| `evidence02.pcap` | SMTP email with docx attachment (572 packets) | Labelled |
-| `evidence03.pcap` | HTTP / AppleTV traffic (1778 packets) | Unlabelled |
-| `evidence04.pcap` | Mixed traffic (short) | Unlabelled |
-| `infected.pcap` | Unknown — potentially malicious | Unlabelled |
-
-Try these questions on evidence01:
-
-```
-pcap > analyze What is the MD5 of the file transferred over AIM?
-pcap > analyze How many TCP packets were sent to port 443 by 192.168.1.158?
-pcap > investigate What happened in this capture? --auto
-```
-
-### Autonomous headless investigation
-
-Run the planner, executor, critic, and report synthesis without entering the
-interactive shell. The JSON report is saved under `~/.easyshark/reports/`:
-
-```bash
-python3 main.py PCAP_SAMPLES/evidence01.pcap --autonomous \
-  --mission "Investigate suspicious activity and possible data exfiltration" \
-  --threat-feed ./intel.json
-```
-
-RSI patterns start as candidates and are not reused until independently
-validated. After reviewing a result, label a matching pattern from the shell:
-
-```text
-pcap > memory rsi label good What SMTP username was used?
-pcap > memory rsi status
-```
-
-Patterns require three independent labels and a 75% positive rate before
-promotion. Repeated negative labels retire them automatically. Set
-`EASYSHARK_RSI_REQUIRE_FEEDBACK=0` only to restore legacy heuristic-only
-behavior.
-
-## Monitoring and deployment
-
-`core.monitor.PCAPMonitor` watches a directory for new PCAPs and can invoke
-the autonomous mission callback once per capture. `WebhookAlerter` provides a
-dependency-free HTTP alert integration, while `core.audit` records local
-operations and `core.observability` exposes counters.
-
-Generated analysis tools can use a separate interpreter by setting
-`EASYSHARK_PROCESS_SANDBOX=1`. Build the included non-root container with:
-
-```bash
-docker build -t easyshark .
-# Persistent state and monitor health port:
-docker run --rm -v "$PWD/captures:/captures" -v easyshark-data:/data \
-  -p 127.0.0.1:8765:8765 easyshark \
-  --monitor /captures --health-port 8765 --once
-```
-
-For a continuously running deployment, copy `.env.example`, set a strong
-`EASYSHARK_HEALTH_TOKEN`, and run `docker compose up --build`.
-
-Run the durable autonomous monitor:
-
-```bash
-python3 main.py --monitor ./captures --interval 30 \
-  --mission "Investigate suspicious activity and possible exfiltration" \
-  --webhook https://example.invalid/security-events
-```
-
-Jobs are persisted in `~/.easyshark/jobs.db`, retried up to three times, and
-reports are written to `~/.easyshark/reports/`.
-
-For local monitoring health checks, add `--health-port 8765` and query
-`http://127.0.0.1:8765/health` or `/metrics`.
-Set `EASYSHARK_HEALTH_TOKEN` to require the `X-EasyShark-Token` header.
-Use `--event-log ~/.easyshark/events.jsonl` for a versioned SIEM-ingestion
-stream. Use `--event-webhook https://siem.example/events` to send the same
-versioned envelopes to a SIEM/SOAR endpoint; failed deliveries are persisted
-in a separate outbox and retried after restart.
-Use `--threat-feed ./intel.json` (or `EASYSHARK_THREAT_FEED`) to attach local
-IOC verdicts to autonomous reports. Remote feeds must be loaded by a trusted
-HTTPS-capable integration; the core feed loader rejects non-HTTPS URLs.
-
-For autonomous SOC triage, add `--mode soc-analyst`. This adds case priority,
-disposition, evidence coverage, affected-host scope, IOC context, and an
-approval-gated response plan to the saved report:
-
-```bash
-python3 main.py capture.pcap --autonomous --mode soc-analyst \
-  --mission "Triage, scope, and document suspicious activity"
-```
-
-Inside the shell, use `soc-analyst [mission]`. Feed and operational dashboard
-capabilities are terminal-native through `update-feeds`, `ioc-check`, `events`,
-`reports`, and `evidence`.
-
-### CYSOC Terminal
-
-For the complete SOC analyst and CYSOC operational guide, see
-[`README-CYSOC.md`](README-CYSOC.md).
-
-Open the dedicated SOC workspace from an active capture:
-
-```text
-pcap > soc-analyst terminal
-
-CYSOC TERMINAL  |  SOC investigation workspace
-cysoc > overview
-cysoc > triage Investigate possible command-and-control traffic
-cysoc > case
-cysoc > evidence 0
-cysoc > back
-pcap >
-```
-
-`cysoc-terminal` is a direct alias. The nested terminal reuses every EasyShark
-forensic command and the same safety and approval policies. `exit`, `back`, or
-`quit` returns to the normal shell; it does not terminate EasyShark.
-
-CYSOC also maintains a vendor-neutral SQLite operations store at
-`~/.easyshark/cysoc.db` (override with `EASYSHARK_SOC_DB`). Import JSON or
-JSONL exports from a SIEM, EDR, identity provider, firewall, DNS platform, or
-other telemetry source:
-
-```text
-cysoc > ingest sentinel-alerts.jsonl sentinel
-cysoc > pulse
-cysoc > queue p1,p2
-cysoc > case create P1 Investigate FIN-LAPTOP-22
-cysoc > case link CYSOC-20260812-AB12 sentinel:alert-1842
-cysoc > case assign CYSOC-20260812-AB12 sahil
-cysoc > correlate FIN-LAPTOP-22
-cysoc > hunt bad.example
-cysoc > detections
-cysoc > action request CYSOC-20260812-AB12 Isolate FIN-LAPTOP-22
-cysoc > action approve 1 soc-lead
-cysoc > benchmark generate .easyshark/synthetic-corpus
-cysoc > benchmark corpus .easyshark/synthetic-corpus/manifest.json
-cysoc > oracle
-cysoc > oracle rederive .easyshark/reports/case.json
-cysoc > baseline check FIN-LAPTOP-22 bytes_out 5000000
-cysoc > similar CYSOC-20260812-AB12
-cysoc > campaign build CYSOC-20260812-AB12
-cysoc > response local CYSOC-20260812-AB12 watchlist bad.example 3600
-```
-
-The generated PCAP corpus is deterministic and hash-pinned, with a benign control and
-labelled detector/safety cases. It is for regression testing and does not replace the
-independently labelled production-validation corpus.
-
-Approval records never execute external changes by themselves. Execution stays
-disabled until a separately authenticated response connector is configured.
-Autonomous `soc-analyst` reports are automatically registered as durable cases,
-including priority, disposition, evidence graph, review status, and response
-recommendations. Oracle outcomes are stored separately in `~/.easyshark/oracle.db`.
-Corpus runs report precision, recall, Brier score, and expected calibration error;
-the repository does not claim production targets until a representative labelled
-corpus has actually been run. Packet bytes remain local during all oracle runs.
-
-`response local` is limited to expiring tags, watchlists, and snapshots. Isolation,
-blocking, account changes, notifications, and other external actions remain approval
-gated and require a separately authenticated connector. Packet/tool content is
-serialized as untrusted observation data; instruction-like payloads are reported as
-findings and are blocked from the response path.
-
-Generated Python analysis runs in the local isolated process by default.
-To use OpenSandbox, install `requirements-opensandbox.txt`, configure
-`OPEN_SANDBOX_DOMAIN`, `OPEN_SANDBOX_PROTOCOL`, and `OPEN_SANDBOX_API_KEY`, then
-set `EASYSHARK_SANDBOX_BACKEND=opensandbox`. `auto` uses OpenSandbox when it is
-configured and otherwise safely falls back to the local process sandbox. The
-remote sandbox is resource-limited, has deny-by-default egress, and is destroyed
-after each execution.
-
-The monitor requires HTTPS webhooks by default. Set
-`EASYSHARK_ALLOW_HTTP_WEBHOOK=1` only for a trusted local test endpoint.
-
-GitHub Actions runs the Python test suite and builds the Docker image on every
-push and pull request.
-
-Legacy labelled tool-routing cases can be scored with `ai.benchmark.score`. Automatic
-RSI promotion and prompt distillation consume only independent outcomes from the
-corpus, synthetic, re-derivation, delayed-intel, or cross-path oracles. The critic is
-an in-run quality gate and is never a cross-run fitness signal.
-
----
-
-## Commands
-
-### Terminal operations and export extensions
-
-V2 is terminal-native. Use `sessions`, `events`, `reports`, and `evidence` for
-session drill-down, live/durable activity, saved investigations, and evidence
-graphs. The Vite dashboard is maintained separately in the sibling V3 tree and
-is not duplicated in V2.
-
-The report command also supports deterministic offline exports:
-`report --mitre`, `report --sigma`, and `report --spl`. TLS ClientHello
-fingerprints are available through `core.tls_fingerprint`, and
-`core.anonymizer.Anonymizer` creates safe packet metadata for external model
-calls without changing the original capture.
+### Terminal Commands
 
 ```
 ┌─ Commands ──────────────────────────────────────────────────┐
 │ analyze <question>   Ask a forensic question (LLM-powered)  │
 │ investigate <q>      Multi-hypothesis investigation         │
+│ report               Full incident report (detectors + LLM)  │
+│ anomalies            Ranked anomaly list (no LLM, <1s)      │
+│ timeline             Compressed behavioral timeline         │
 │ protocols            Protocol breakdown table               │
 │ ips                  Host summary table                     │
 │ flows                Top flows table                        │
@@ -307,35 +173,212 @@ calls without changing the original capture.
 │ creds                Extracted credentials                  │
 │ summary              Capture overview (0 LLM calls)         │
 │ extract <filename>   Save extracted file to disk            │
+│ extract-media <dir>  Save embedded docx images to disk      │
 │ capture interfaces   List capture interfaces                │
 │ capture start <if>   Start live capture                     │
 │ capture stop         Stop and reload capture                │
 │ sessions             List saved sessions                    │
 │ session info         Current session details                │
 │ session forget       Delete current session                 │
+│ soc-analyst [mission] Autonomous SOC triage                │
+│ cysoc-terminal       Open CYSOC workspace                   │
 │ exit / quit          Exit EasyShark                         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+### Autonomous Headless Investigation
+
+```bash
+python3 main.py PCAP_SAMPLES/evidence01.pcap --autonomous \
+  --mission "Investigate suspicious activity and possible data exfiltration" \
+  --threat-feed ./intel.json
+```
+
+### Autonomous SOC Triage
+
+```bash
+python3 main.py capture.pcap --autonomous --mode soc-analyst \
+  --mission "Triage, scope, and document suspicious activity"
+```
+
+### CYSOC Terminal
+
+```text
+pcap > soc-analyst terminal
+
+cysoc > overview
+cysoc > triage Investigate possible command-and-control traffic
+cysoc > pulse
+cysoc > queue p1,p2
+cysoc > case create P1 Suspected C2 beacon
+cysoc > hunt 192.168.1.159
+cysoc > correlate FIN-LAPTOP-22
+cysoc > baseline check FIN-LAPTOP-22 bytes_out 5000000
+cysoc > action request CYSOC-20260812-AB12 Isolate FIN-LAPTOP-22
+cysoc > action approve 1 soc-lead
+cysoc > benchmark corpus PCAP_SAMPLES/generated/manifest.json
+cysoc > oracle
+cysoc > back
+```
+
+`cysoc-terminal` is a direct alias. See [`README-CYSOC.md`](README-CYSOC.md) for the complete CYSOC guide.
+
+### Monitoring and Deployment
+
+```bash
+# Continuous monitor
+python3 main.py --monitor ./captures --interval 30 \
+  --mission "Investigate suspicious activity and possible exfiltration" \
+  --webhook https://example.invalid/security-events
+
+# Docker
+docker build -t easyshark .
+docker run --rm -v "$PWD/captures:/captures" -v easyshark-data:/data \
+  -p 127.0.0.1:8765:8765 easyshark \
+  --monitor /captures --health-port 8765 --once
+```
+
 ---
 
-## Requirements
+## Features
 
-- Python 3.10+
-- WSL2 / Linux (recommended) or macOS
-- 7.4 GB RAM minimum (for PCAP processing + browser overhead)
-- Network access for LLM queries (Zen API key required; offline deterministic info commands work without network)
-- No GPU required
+### Natural-Language Forensic Q&A
+Ask questions in plain English. The LLM calls the right forensic tool, cites evidence, and returns a sourced answer. A deterministic premise-mismatch gate refuses questions about protocols the capture doesn't contain.
+
+### 22 Deterministic Forensic Tools
+Read-only tools including `get_statistics`, `search_payloads`, `extract_files`, `follow_stream`, `get_smtp_credentials`, `get_email_attachments`, `compute_packets`, `extract_embedded_media`, and more. All gated by triage flags so only relevant tools are advertised to the LLM.
+
+### Sandboxed Code Execution
+LLM-generated Python runs in an isolated sandbox — either in-process (restricted builtins, banlist, 5s timeout) or in a Docker container via OpenSandbox (deny-by-default egress, resource limits, destroyed after each run). The payload is written to a file inside the container to avoid argv length limits.
+
+### 8 Anomaly Detectors
+Beaconing, DNS entropy/tunneling, exfiltration ratio, port scan (horizontal + vertical), protocol-port mismatch, lateral movement, long connections, domain reputation, TLS fingerprint anomalies, and prompt-injection payload detection — all deterministic, no LLM required.
+
+### Autonomous Investigation (Hypothesis DAG)
+The `investigate` command generates hypotheses, verifies each via the tool loop, and concludes with a structured incident report. The `--autonomous` flag runs headless with planner → executor → critic DAG.
+
+### CYSOC Terminal
+A dedicated SOC workspace with alert queue, case management, entity hunting, multi-sensor fusion, behavioral baselines, oracle benchmarking, approval-gated response, and threat intel feeds — all terminal-native.
+
+### Incident Reports with MITRE Mapping
+The `report` command runs detectors → narrative compression → single LLM synthesis call, producing an incident narrative, suspect hosts, MITRE ATT&CK techniques, IOCs, and analyst next steps. A confidence gate skips the LLM call when anomaly scores are too low.
+
+### Threat Intelligence Integration
+Cross-reference detected IOCs against Feodo Tracker, URLhaus, and ThreatFox feeds (~24,568 indicators). IOCs are auto-annotated with badges (KNOWN MALICIOUS / CLEAN / UNKNOWN) in reports and investigations.
+
+### Live Capture
+Capture traffic via `dumpcap` or `tcpdump`. On stop, the capture is hot-reloaded into the shell and auto-reported. Graceful error handling when no capture tool is installed.
+
+### Session Persistence and Memory
+Sessions are saved automatically and resumable via `--session <key>`. The failure library logs heuristic misses for pattern growth. RSI patterns require 3 independent oracle labels before activation.
+
+### Synthetic PCAP Corpus
+7 deterministically generated PCAPs (beaconing, DNS tunnel, exfiltration, port scan, prompt injection, benign control) with hash-pinned manifests for regression testing. Oracle scoring reports precision, recall, Brier score, and ECE.
+
+### Prompt-Injection Defense
+Packet/tool content is wrapped in untrusted-observation envelopes. Instruction-like payloads are detected as security findings and blocked from the response path. Red-team fixtures validate 10/10 malicious payload detection with 0/3 false positives.
 
 ---
 
-## Project Status
+## Feature Usage
 
-⚠ **Early developmental stage.** EasyShark is functional and currently passes 115 automated tests, but you may encounter:
+### Asking a Forensic Question
 
-- **Hallucinated answers** — the LLM can sometimes invent evidence. The claim-grounding pass and hallucination detector flag these, but they are not foolproof.
-- **Tool-loop failures** — free-tier models can timeout or return malformed responses. The tool loop retries once then falls back to a dissection-aware summary.
-- **Late Response** - Free models do give a late response, making the tool slower.
+```
+pcap > analyze What SMTP username was used to send mail in this capture?
+pcap > analyze What is the MD5 of the file transferred over AIM?
+pcap > analyze compute the standard deviation of UDP packet sizes
+```
+
+The LLM calls tools, grounds claims, and returns `Answer: <value> (source: <tool>)`.
+
+### Extracting Embedded Images from a DOCX
+
+```
+pcap > extract-media /tmp/extracted
+```
+
+Deterministically re-carves the docx from SMTP attachments, unzips `word/media/*`, and writes each image to the given directory. No LLM needed. Or via natural language:
+
+```
+pcap > analyze extract the embedded image from the docx and save it to /tmp/extracted
+```
+
+### Running an Investigation
+
+```
+pcap > investigate What happened in this capture?
+pcap > investigate Who exfiltrated data? --auto
+```
+
+Generates hypotheses, verifies each with the tool loop, concludes with a verdict and IOCs.
+
+### Generating a Report
+
+```
+pcap > report
+pcap > report --json
+pcap > report --force
+```
+
+`--force` bypasses the confidence gate. `--json` outputs raw JSON.
+
+### Checking Threat Intel
+
+```
+pcap > update-feeds
+pcap > ioc-check 45.33.12.7
+pcap > feeds
+```
+
+### SOC Triage via CYSOC
+
+```
+pcap > soc-analyst terminal
+cysoc > triage Investigate possible C2 activity
+cysoc > cases
+cysoc > case CYSOC-20260812-AB12
+cysoc > action request CYSOC-20260812-AB12 Isolate host
+cysoc > action approve 1 soc-lead
+```
+
+### Benchmarking with the Oracle
+
+```
+cysoc > benchmark generate .easyshark/synthetic-corpus
+cysoc > benchmark corpus .easyshark/synthetic-corpus/manifest.json
+cysoc > oracle
+```
+
+Reports precision, recall, Brier score, and ECE across the corpus.
+
+### Configuring the Sandbox
+
+```bash
+# In-process (default)
+EASYSHARK_SANDBOX_BACKEND=local
+
+# OpenSandbox container (requires server on localhost:8080)
+EASYSHARK_SANDBOX_BACKEND=opensandbox
+OPEN_SANDBOX_DOMAIN=http://127.0.0.1:8080
+OPEN_SANDBOX_PROTOCOL=http
+
+# Auto — tries container, falls back to local
+EASYSHARK_SANDBOX_BACKEND=auto
+```
+
+---
+
+## Limitations
+
+- **Hallucinated answers** — the LLM can invent evidence. The claim-grounding pass and hallucination detector flag these, but they are not foolproof.
+- **Cloud dependency for LLM** — `analyze`, `investigate`, and `report` require a reachable cloud provider (Zen / OpenRouter / Groq). Deterministic commands (`anomalies`, `timeline`, `protocols`, `ips`, `creds`, `summary`, `extract-media`) work fully offline.
+- **Rate limits** — free-tier cloud models can timeout or return 429s. The 3-provider fallback chain mitigates but does not eliminate this.
+- **No TLS decryption** — TLS ClientHello metadata and JA3/JA4-style fingerprints are analyzed, but application content inside TLS is not decrypted.
+- **Sandbox is compute-only** — the OpenSandbox container has no host-filesystem bridge. Files written inside the container are destroyed after each run. Host-side tools (`extract-media`) handle persistence.
+- **Not production-validated** — 126 automated tests pass, but production readiness requires 500+ independently labelled captures, held-out ECE below 0.10, and prompt-injection red-team corpus testing.
+- **No external response execution** — approving a containment action records authorization only. No automatically enabled production containment connector ships with EasyShark.
+- **Single-capture analysis** — EasyShark analyses one PCAP at a time. Multi-capture correlation is via the CYSOC case timeline, not cross-capture packet analysis.
 
 ---
 
@@ -347,9 +390,25 @@ Key areas for contribution:
 
 - **New forensic tools** — add tools to `ai/tool_registry.py`
 - **Dissector extractors** — add protocol parsers to `core/dissector.py`
+- **Detectors** — add anomaly detectors to `core/detectors.py`
 - **Pattern learner** — improve learned tool hint accuracy in `ai/pattern_learner.py`
-- **Prompt optimisation** — sharpen system prompts in `ai/prompt_optimizer.py`
-- **Test coverage** — add regression tests for new PCAPs
+- **Prompt optimisation** — sharpen system prompts in `config/settings.py`
+- **Test coverage** — add regression tests for new PCAPs in `tests/`
+- **CYSOC commands** — extend the SOC workspace in `cli/cysoc_commands.py`
+- **Oracle sources** — add independent evaluation sources in `ai/oracle.py`
+
+### Running Tests
+
+```bash
+python3 -m unittest discover tests
+```
+
+### Style
+
+- No comments unless explicitly requested
+- No emojis in code or output unless requested
+- ANSI escape codes only — no third-party TUI libraries
+- TUI rendering is frozen (ANSI-aware box/table code in `cli/` must not regress)
 
 ---
 

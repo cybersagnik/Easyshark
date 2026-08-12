@@ -10,7 +10,7 @@ When the LLM is unreachable, fall back to a static summary block so the
 shell never goes silent.
 
 The LLM client is attached lazily via :meth:`attach_llm` so the shell
-does not pay the Ollama probe cost up-front when AI features are unused.
+does not probe cloud endpoints up-front when AI features are unused.
 
 Phase 6: premise-mismatch detection. Before invoking the LLM, we check
 the question's premise against the capture's triage capabilities

@@ -371,8 +371,8 @@ The active cloud routing order is:
 OpenCode Zen -> OpenRouter -> Groq -> deterministic/offline degradation
 ```
 
-Provider keys and per-role model overrides are documented in `.env.example`. Ollama
-and local models are not part of the active routing chain.
+Provider keys and per-role model overrides are documented in `.env.example`.
+The architecture is cloud-only — no local model daemon is used.
 
 If every provider is unavailable, deterministic packet commands, detections, hunting,
 cases, timelines, reports, and local SOC operations remain available. A model-backed

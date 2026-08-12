@@ -2,7 +2,7 @@
 detectors.py — Layer 1 of the auto-analyst pipeline (context.md §14.3).
 
 Eight deterministic anomaly detectors that score behavioral signals in a
-PCAP. No LLM, no Ollama — pure Python over PacketMetadata.
+PCAP. No LLM — pure Python over PacketMetadata.
 
 Public API:
     run_all(packets, flows) -> List[Anomaly]

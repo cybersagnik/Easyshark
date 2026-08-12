@@ -60,6 +60,7 @@ class CommandHandler:
             "events":    self.cmd_events,
             "reports":   self.cmd_reports,
             "evidence":  self.cmd_evidence,
+            "extract-media": self.cmd_extract_media,
             "help":      self.cmd_help,
             "?":         self.cmd_help,
         }
@@ -299,6 +300,38 @@ class CommandHandler:
                      for node in nodes[:50])
         return "\n".join(lines)
 
+    def cmd_extract_media(self, arg: str) -> str:
+        """extract-media <output_dir> — deterministically save embedded
+        media (word/media/*) from .docx SMTP attachments to a host path.
+        No LLM, no sandbox — pure host-side re-carve + unzip + write."""
+        output_dir = (arg or "").strip()
+        if not output_dir:
+            return self.fmt.error("usage: extract-media <output_dir>")
+        try:
+            from ai.tool_registry import (
+                ToolContext, tool_extract_embedded_media)
+            packets = self.shell.get_packets()
+            ctx = ToolContext(
+                packets=packets,
+                flows=self.shell.flow_engine.get_all_flows(),
+                alerts=[a for r in self.shell.rules for a in r.get_alerts()],
+                stats_engine=self.shell.stats_engine,
+                flow_engine=self.shell.flow_engine,
+            )
+            result = tool_extract_embedded_media(
+                {"output_dir": output_dir}, ctx)
+        except Exception as exc:
+            logger.error("extract-media failed: %s", exc)
+            return self.fmt.error(f"extract-media failed: {exc}")
+        if "error" in result:
+            return self.fmt.error(result["error"])
+        lines = [result["output_dir"]]
+        for item in result.get("saved", []):
+            lines.append(
+                f"  saved {item.get('filename')}  {item.get('size')} bytes  "
+                f"md5={item.get('md5')}\n    -> {item.get('path')}")
+        return "\n".join(lines)
+
     def cmd_help(self, arg: str) -> str:
         # L19 — the REPL intercepts `help`/`?` and calls
         # shell._print_help() directly; this dispatch entry is a
@@ -322,5 +355,6 @@ class CommandHandler:
             "  sessions | session info | session forget | memory\n"
             "  update-feeds [provider] | ioc-check <value>\n"
             "  events [limit] | reports | evidence [report-index]\n"
+            "  extract-media <output_dir>\n"
             "  help | exit\n"
         )

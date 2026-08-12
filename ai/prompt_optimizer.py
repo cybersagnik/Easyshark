@@ -20,7 +20,7 @@ conservative proxy (no tiktoken dependency on the CPU-only box).
 import re
 from typing import Any, Dict, List, Optional
 
-from config.settings import OLLAMA_SYSTEM_PROMPTS
+from config.settings import SYSTEM_PROMPTS
 
 __all__ = ["estimate_tokens", "build_system_prompt", "top_patterns"]
 
@@ -127,7 +127,7 @@ def build_system_prompt(role: str,
         base: override the base prompt text (kept for schema-critical
             prompts like the critic / executor verdict JSON).
     """
-    stock = OLLAMA_SYSTEM_PROMPTS.get(role, OLLAMA_SYSTEM_PROMPTS["explainer"])
+    stock = SYSTEM_PROMPTS.get(role, SYSTEM_PROMPTS["explainer"])
     body = _compress_base(base or stock)
 
     pattern_lines: List[str] = []

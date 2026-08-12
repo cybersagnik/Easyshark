@@ -11,7 +11,7 @@ Replaces the linear for-each loop with a dependency-aware DAG:
 
 Execution is strictly sequential (no threading — WSL2 RAM budget, and
 ≤5 hypotheses make it a non-issue). Every LLM call goes through
-LLMClient so the OpenRouter→Ollama→Groq chain and the Phase 9 rate
+LLMClient so the Zen→OpenRouter→Groq chain and the Phase 9 rate
 limiter apply automatically.
 
 Public API:

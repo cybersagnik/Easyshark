@@ -2,8 +2,8 @@
 RuleGenerator — emits Snort / YARA / Python detection rules from a
 natural-language task description.
 
-Strict single-shot prompt for the small Ollama coder model. The system
-prompt in config.settings.OLLAMA_SYSTEM_PROMPTS['coder'] already pins
+Strict single-shot prompt for the coder model. The system
+prompt in config.settings.SYSTEM_PROMPTS['coder'] already pins
 the output format.
 """
 from __future__ import annotations

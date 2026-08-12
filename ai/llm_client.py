@@ -1,23 +1,23 @@
 """
-LLMClient — Ollama primary, Groq optional.
+LLMClient — cloud-only transport (Zen -> OpenRouter -> Groq).
 
 Per the EasyShark brief:
   - Public interface is FROZEN (do not rename / change signatures).
   - New transport logic goes into new methods, not by mutating these.
 
-Architecture (small Ollama models on CPU, 7.4 GB WSL host):
+Architecture (cloud-only, no local models):
 
-   1. Constructor takes no required arguments. Reads OLLAMA_BASE_URL
-      and (optionally) GROQ_API_KEY from env. Tries Ollama first,
-      Groq only if GROQ_ENABLED=1 is exported.
-   2. query() → single-shot prompt completion.
-   3. query_planner / query_explainer / query_coder → role-routed.
-   4. query_with_tools → multi-turn tool-calling loop.
-   5. is_available() → True if any backend is reachable.
+   1. Constructor takes no required arguments. Reads ZEN_API_KEY,
+      OPENROUTER_API_KEY, and GROQ_API_KEY from env. Routes through
+      the chain Zen -> OpenRouter -> Groq.
+   2. query() -> single-shot prompt completion.
+   3. query_planner / query_explainer / query_coder -> role-routed.
+   4. query_with_tools -> multi-turn tool-calling loop.
+   5. is_available() -> True if any backend is reachable.
 
-The Ollama backend uses the OpenAI-compatible /v1/chat/completions
-endpoint so the same request shape works for both transports and the
-tool-calling code path is identical.
+All backends use the OpenAI-compatible /v1/chat/completions endpoint
+so the same request shape works for all transports and the tool-calling
+code path is identical.
 """
 from __future__ import annotations
 
@@ -44,12 +44,6 @@ except Exception:
     GroqError = Exception  # type: ignore
 
 from config.settings import (
-    OLLAMA_BASE_URL,
-    OLLAMA_ENABLED,
-    OLLAMA_MODELS,
-    OLLAMA_SYSTEM_PROMPTS,
-    OLLAMA_TEMPERATURE,
-    OLLAMA_TIMEOUT,
     GROQ_API_KEY,
     GROQ_BASE_URL,
     GROQ_ENABLED,
@@ -58,6 +52,8 @@ from config.settings import (
     GROQ_MODEL,
     GROQ_SYSTEM_PROMPTS,
     GROQ_TIMEOUT,
+    SYSTEM_PROMPTS,
+    SYSTEM_TEMPERATURE,
     TOOL_CALL_MAX_STEPS,
     TOOL_RESULT_CHAR_CAP,
     TOOL_TOTAL_CHAR_CAP,
@@ -121,35 +117,35 @@ def _is_username_like(s: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Response adapters — duck-type an Ollama / Groq response so the rest of
+# Response adapters — duck-type an OpenAI-compat response so the rest of
 # the codebase can treat both backends identically.
 # ---------------------------------------------------------------------------
-class _OllamaToolCall:
+class _CompatToolCall:
     __slots__ = ("id", "function")
     def __init__(self, tc_dict: Dict[str, Any]):
         self.id = tc_dict.get("id", "")
         fn = tc_dict.get("function") or {}
-        self.function = _OllamaFunctionCall(
+        self.function = _CompatFunctionCall(
             name=fn.get("name", ""),
             arguments=fn.get("arguments", "") or "",
         )
 
 
-class _OllamaFunctionCall:
+class _CompatFunctionCall:
     __slots__ = ("name", "arguments")
     def __init__(self, name: str, arguments: str):
         self.name = name
         self.arguments = arguments
 
 
-class _OllamaMessage:
+class _CompatMessage:
     __slots__ = ("content", "tool_calls", "role", "reasoning_content")
     def __init__(self, msg_dict: Dict[str, Any]):
         self.role = msg_dict.get("role", "assistant")
         self.content = msg_dict.get("content") or ""
         self.reasoning_content = msg_dict.get("reasoning_content")
         tc_list = msg_dict.get("tool_calls") or []
-        self.tool_calls = [_OllamaToolCall(tc) for tc in tc_list]
+        self.tool_calls = [_CompatToolCall(tc) for tc in tc_list]
         # Phase 15 hardening: some Qwen/Zen-family models emit their tool
         # call as <invoke> XML inside `content` instead of a native
         # tool_calls block. Convert that XML into structured tool calls so
@@ -174,7 +170,7 @@ def _parse_invoke_xml(content: str):
     """Parse <invoke>...</invoke> and self-closing <invoke name="..."/>
     tool-call XML out of a model response.
 
-    Returns (remaining_text, [(_OllamaToolCall, ...)]) or (content, []).
+    Returns (remaining_text, [(_CompatToolCall, ...)]) or (content, []).
     The remaining text is the content outside all invoke blocks (the
     model's prose reasoning, if any).
 
@@ -186,7 +182,7 @@ def _parse_invoke_xml(content: str):
     calls = []
 
     def _mk(name: str, args: Dict[str, Any]) -> None:
-        calls.append(_OllamaToolCall({
+        calls.append(_CompatToolCall({
             "id": f"call_xml_{len(calls)}",
             "function": {"name": name, "arguments": json.dumps(args)},
         }))
@@ -215,22 +211,22 @@ def _parse_invoke_xml(content: str):
     return stripped.strip(), calls
 
 
-class _OllamaChoice:
+class _CompatChoice:
     __slots__ = ("message", "finish_reason", "index")
     def __init__(self, ch_dict: Dict[str, Any]):
         self.index = ch_dict.get("index", 0)
         self.finish_reason = ch_dict.get("finish_reason", "stop")
-        self.message = _OllamaMessage(ch_dict.get("message") or {})
+        self.message = _CompatMessage(ch_dict.get("message") or {})
 
 
-class _OllamaCompatResponse:
-    """Make an Ollama OpenAI-compat payload look like a Groq response."""
+class _CompatResponse:
+    """Wrap an OpenAI-compat JSON payload into a response object."""
 
     def __init__(self, payload: Dict[str, Any]):
         self._payload = payload
         self.id = payload.get("id", "")
         self.model = payload.get("model", "")
-        self.choices = [_OllamaChoice(c) for c in (payload.get("choices") or [])]
+        self.choices = [_CompatChoice(c) for c in (payload.get("choices") or [])]
         self.usage = payload.get("usage") or {}
 
 
@@ -386,10 +382,10 @@ def _docx_reassembly_hint(context) -> str:
 # LLMClient
 # ===========================================================================
 class LLMClient:
-    """LLM client. Ollama primary (default), Groq optional.
+    """LLM client. Cloud-only (Zen -> OpenRouter -> Groq).
 
     Public API (do not break):
-        __init__(api_key=None, base_url=None, ollama_url=None)
+        __init__(api_key=None, base_url=None)
         query(prompt, model_type='planner', temperature=0.7) -> Optional[str]
         query_planner(user_input, context)                    -> Optional[str]
         query_explainer(question, data)                      -> Optional[str]
@@ -399,7 +395,7 @@ class LLMClient:
         backend()                                            -> str
     """
 
-    # Errors from Groq that warrant fallback to Ollama.
+    # Errors from Groq that warrant fallback.
     _FALLBACK_TRIGGERS = (
         "429", "rate limit", "rate_limit", "too many requests",
         "401", "unauthorized", "invalid api key",
@@ -410,8 +406,7 @@ class LLMClient:
 
     def __init__(self,
                  api_key: Optional[str] = None,
-                 base_url: Optional[str] = None,
-                 ollama_url: Optional[str] = None):
+                 base_url: Optional[str] = None):
         # OpenRouter cloud — PRIMARY transport (Phase 8).
         self.openrouter_enabled = bool(OPENROUTER_ENABLED)
         self.openrouter_api_key = (api_key or os.environ.get("OPENROUTER_API_KEY", "")
@@ -467,7 +462,7 @@ class LLMClient:
         # after each AI answer so the analyst sees the backend change.
         self.degradation_notes: List[str] = []
 
-        # Phase 14 TASK 3 — per-provider call tracking. Ollama is absent
+        # Phase 14 TASK 3 — per-provider call tracking.
         # from the active chain (not supported on this machine).
         self.groq_calls_today: int = 0
         self.fallback_count: int = 0
@@ -484,12 +479,7 @@ class LLMClient:
         # only (session summary table + session-file provider_counts).
         self._role_call_counts: Dict[str, Dict[str, int]] = {}
 
-        # Ollama always present (fallback).
-        self.ollama_base_url = (ollama_url or os.environ.get("OLLAMA_BASE_URL")
-                                or OLLAMA_BASE_URL).rstrip("/")
-        self.ollama_timeout = OLLAMA_TIMEOUT
-        self.ollama_enabled = bool(OLLAMA_ENABLED)
-        self._ollama_reachable_cache: Optional[bool] = None
+        # Ollama removed — cloud-only (Zen -> OpenRouter -> Groq).
 
         # Groq optional.
         self.groq_enabled = bool(GROQ_ENABLED)
@@ -511,7 +501,7 @@ class LLMClient:
 
         self.default_max_tokens = GROQ_MAX_TOKENS
         self.timeout = GROQ_TIMEOUT
-        self._active_backend = "ollama"
+        self._active_backend = "zen"
 
         # Optional UI status sink (cli/status.py). Set by the shell so the
         # analyst sees provider / tool-loop / stream progress while a
@@ -563,7 +553,7 @@ class LLMClient:
     # Backend introspection                                              #
     # ------------------------------------------------------------------ #
     def backend(self) -> str:
-        return getattr(self, "_active_backend", "ollama")
+        return getattr(self, "_active_backend", "zen")
 
     @staticmethod
     def _should_fallback(message: str) -> bool:
@@ -592,7 +582,7 @@ class LLMClient:
 
         Enforces (all in-memory, session-scoped):
           - hard cap: after OPENROUTER_DAILY_HARD_CAP calls, fall through
-            to Ollama for the rest of the session
+            to the next provider for the rest of the session
           - soft cap: log a warning at OPENROUTER_DAILY_SOFT_CAP
           - per-minute: once OPENROUTER_MINUTE_SOFT_CAP calls land in the
             current 60s window, sleep OPENROUTER_MINUTE_SLEEP_SEC before
@@ -610,7 +600,7 @@ class LLMClient:
             self._mark_exhausted("openrouter")
             logger.warning(
                 "OpenRouter session cap reached (%d calls) — falling through "
-                "to Ollama for the rest of this session.",
+                "to the next provider for the rest of this session.",
                 calls_today,
             )
             self.note_degradation(
@@ -703,7 +693,7 @@ class LLMClient:
                                   model: Optional[str] = None):
         """POST to OpenRouter's OpenAI-compatible endpoint.
 
-        Returns a response object (same duck-type as Ollama/Groq) or None
+        Returns a response object (same duck-type as the compat layer) or None
         so the caller can fall through to the next backend. A 429/4xx is
         treated as "this backend is out of the rotation" for a 60s cooldown
         via the reachability probe cache; a 429 additionally exhausts the
@@ -762,7 +752,7 @@ class LLMClient:
                 except Exception as exc:
                     logger.error("OpenRouter returned non-JSON: %s", exc)
                     return None
-                return _OllamaCompatResponse(payload)
+                return _CompatResponse(payload)
             except Exception as exc:
                 logger.warning("OpenRouter requests.Session failed: %s", exc)
                 # Fall through to the urllib transport below.
@@ -799,7 +789,7 @@ class LLMClient:
         except Exception as exc:
             logger.error("OpenRouter returned non-JSON: %s", exc)
             return None
-        return _OllamaCompatResponse(payload)
+        return _CompatResponse(payload)
 
     # ------------------------------------------------------------------ #
     # OpenCode Zen transport (cloud, PRIMARY — replaces OpenRouter)      #
@@ -895,7 +885,7 @@ class LLMClient:
                            model: Optional[str] = None):
         """POST to OpenCode Zen's OpenAI-compatible endpoint.
 
-        Returns a response object (same duck-type as Ollama/Groq) or None
+        Returns a response object (same duck-type as the compat layer) or None
         so the caller can fall through to the next backend. A 403/4xx is
         treated as "this backend is out of the rotation" via the cache.
 
@@ -1001,7 +991,7 @@ class LLMClient:
             except Exception as exc:
                 logger.error("Zen returned non-JSON: %s", exc)
                 return None
-            return _OllamaCompatResponse(payload)
+            return _CompatResponse(payload)
 
     # ------------------------------------------------------------------ #
     # Phase 16 TASK 1 — role x provider exhaustion                       #
@@ -1075,14 +1065,13 @@ class LLMClient:
         """Resolve the model for a (role x provider) pair.
 
         Priority:
-          1. env var {PROVIDER}_{ROLE}_MODEL (e.g. ZEN_EXPLAINER_MODEL).
-          2. per-provider default dict (ZEN_MODELS / OPENROUTER_MODELS /
-             GROQ_MODELS / OLLAMA_MODELS).
-          3. Groq only: GROQ_MODEL when the role has no per-role entry
-             (legacy single-model contract).
+           1. env var {PROVIDER}_{ROLE}_MODEL (e.g. ZEN_EXPLAINER_MODEL).
+           2. per-provider default dict (ZEN_MODELS / OPENROUTER_MODELS /
+              GROQ_MODELS).
+           3. Groq only: GROQ_MODEL when the role has no per-role entry
+              (legacy single-model contract).
 
-        With provider="" (legacy callers) this returns the Ollama default
-        so _ollama_call_messages / _stream_ollama_ndjson keep working.
+        With provider="" (legacy callers) this returns the Zen default.
         """
         if provider:
             env_key = f"{provider.upper()}_{model_type.upper()}_MODEL"
@@ -1100,16 +1089,14 @@ class LLMClient:
                 if GROQ_MODEL:
                     return GROQ_MODEL
                 return GROQ_MODELS.get(model_type, GROQ_MODELS["planner"])
-            if provider == "ollama":
-                return OLLAMA_MODELS.get(model_type, OLLAMA_MODELS["planner"])
-        return OLLAMA_MODELS.get(model_type, OLLAMA_MODELS["planner"])
+        return ZEN_MODELS.get(model_type, ZEN_MODELS["planner"])
 
     # ------------------------------------------------------------------ #
     # Phase 14 TASK 1 — role-based provider routing                      #
     # ------------------------------------------------------------------ #
-    # Active chain (the only chain that matters):
-    #     Zen (primary) -> OpenRouter (secondary) -> Groq (last resort)
-    # Ollama is intentionally absent — not supported on this machine.
+    # Active chain:
+    #     Zen (primary) -> OpenRouter (secondary) -> Groq
+    #
     # Every role (planner / explainer / coder / critic) uses the same
     # chain but with per-role model resolution and per-role exhaustion.
     # Override rules:
@@ -1180,81 +1167,20 @@ class LLMClient:
     def _default_temperature(self, model_type: str) -> float:
         # Gap 5 — backend-aware defaults. Zen is the primary transport now
         # (replaces OpenRouter), so its per-role table wins when Zen is the
-        # first ready backend; otherwise fall back to the classic Ollama map.
+        # first ready backend; otherwise fall back to the system temperature map.
         # GROQ_TEMPERATURE (settings.py) is now dead config — removed.
         backend = self._pick_backend(model_type)
-        table = ZEN_TEMPERATURE if backend == "zen" else OLLAMA_TEMPERATURE
+        table = ZEN_TEMPERATURE if backend == "zen" else SYSTEM_TEMPERATURE
         return table.get(model_type, 0.2)
 
     def _system_prompt_for(self, model_type: str) -> str:
-        return OLLAMA_SYSTEM_PROMPTS.get(model_type, OLLAMA_SYSTEM_PROMPTS["explainer"])
-
-    # ------------------------------------------------------------------ #
-    # Ollama transport                                                   #
-    # ------------------------------------------------------------------ #
-    def _ollama_reachable(self) -> bool:
-        if self._ollama_reachable_cache is not None:
-            return self._ollama_reachable_cache
-        if not self.ollama_enabled or _urlreq is None:
-            self._ollama_reachable_cache = False
-            return False
-        try:
-            req = _urlreq.Request(self.ollama_base_url + "/api/version", method="GET")
-            with _urlreq.urlopen(req, timeout=min(self.ollama_timeout, 5)) as r:
-                self._ollama_reachable_cache = (r.status == 200)
-        except Exception as exc:
-            logger.warning("Ollama unreachable at %s: %s", self.ollama_base_url, exc)
-            self._ollama_reachable_cache = False
-        return self._ollama_reachable_cache
-
-    def _ollama_call_messages(self,
-                              messages: List[Dict[str, Any]],
-                              model_type: str,
-                              temperature: float,
-                              max_tokens: int,
-                              tools: Optional[List[Dict[str, Any]]] = None,
-                              tool_choice: Optional[Any] = None,
-                              model: Optional[str] = None):
-        if not self._ollama_reachable():
-            return None
-        model_name = model or self._model_for(model_type)
-        body: Dict[str, Any] = {
-            "model": model_name,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-        if tools is not None:
-            body["tools"] = tools
-            body["tool_choice"] = tool_choice if isinstance(tool_choice, str) else "auto"
-        url = self.ollama_base_url + "/v1/chat/completions"
-        data = json.dumps(body).encode("utf-8")
-        req = _urlreq.Request(url, data=data,
-                              headers={"Content-Type": "application/json"},
-                              method="POST")
-        try:
-            with _urlreq.urlopen(req, timeout=self.ollama_timeout) as r:
-                raw = r.read().decode("utf-8")
-        except _urlerr.HTTPError as exc:
-            logger.error("Ollama HTTP %s — %s", exc.code,
-                         exc.read().decode("utf-8", "replace")[:300])
-            return None
-        except Exception as exc:
-            logger.error("Ollama request failed: %s", exc)
-            return None
-        try:
-            payload = json.loads(raw)
-        except Exception as exc:
-            logger.error("Ollama returned non-JSON: %s", exc)
-            return None
-        return _OllamaCompatResponse(payload)
+        return SYSTEM_PROMPTS.get(model_type, SYSTEM_PROMPTS["explainer"])
 
     # ------------------------------------------------------------------ #
     # Streaming transport (Phase 10 §10.4)                               #
     #   query_stream() streams text deltas token-by-token instead of      #
     #   blocking for the full response. OpenRouter SSE is primary;        #
-    #   Ollama /api/chat NDJSON is the fallback; a plain single-shot      #
+    #   A plain single-shot      #
     #   call is the last resort. Planner / critic / dag_runner keep the   #
     #   non-streaming paths (they need whole JSON messages).              #
     # ------------------------------------------------------------------ #
@@ -1373,59 +1299,6 @@ class LLMClient:
                     delta = None
                 if delta:
                     yield delta
-        finally:
-            try:
-                resp.close()
-            except Exception:
-                pass
-
-    def _stream_ollama_ndjson(self,
-                              messages: List[Dict[str, Any]],
-                              model_type: str,
-                              temperature: float,
-                              max_tokens: int) -> Iterator[str]:
-        """Generator: Ollama /api/chat NDJSON deltas (message.content)."""
-        if not self.ollama_enabled:
-            return
-        model_name = self._model_for(model_type)
-        body: Dict[str, Any] = {
-            "model": model_name,
-            "messages": messages,
-            "stream": True,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }
-        url = self.ollama_base_url + "/api/chat"
-        data = json.dumps(body).encode("utf-8")
-        req = _urlreq.Request(url, data=data,
-                              headers={"Content-Type": "application/json"},
-                              method="POST")
-        try:
-            resp = _urlreq.urlopen(req, timeout=self.ollama_timeout)
-        except _urlerr.HTTPError as exc:
-            logger.error("Ollama stream HTTP %s — %s", exc.code,
-                         exc.read().decode("utf-8", "replace")[:300])
-            return
-        except Exception as exc:
-            logger.error("Ollama stream request failed: %s", exc)
-            return
-        try:
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", "replace").strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception as exc:
-                    logger.warning("Ollama NDJSON parse failed: %s", exc)
-                    continue
-                content = (obj.get("message") or {}).get("content")
-                if content:
-                    yield content
-                if obj.get("done"):
-                    break
         finally:
             try:
                 resp.close()
@@ -2244,7 +2117,7 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         """True iff any active provider is reachable.
 
         Phase 14 — checks the role-agnostic chain Zen -> OpenRouter ->
-        Groq. Ollama is not part of the active chain.
+        Groq.
         """
         backend = self._pick_backend("planner")
         if backend is not None:
@@ -2289,13 +2162,3 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
         summary = "\n".join(lines)
         print(summary)
         return summary
-
-    def _ollama_ping(self) -> Tuple[bool, str]:
-        try:
-            req = _urlreq.Request(self.ollama_base_url + "/api/version", method="GET")
-            with _urlreq.urlopen(req, timeout=min(self.ollama_timeout, 5)) as r:
-                raw = r.read().decode("utf-8")
-            payload = json.loads(raw)
-            return True, payload.get("version", "?")
-        except Exception as exc:
-            return False, str(exc)

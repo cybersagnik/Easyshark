@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 _CHILD = r'''import json, sys, types, builtins
 payload = json.load(sys.stdin)
-allowed = {"math", "re", "collections", "statistics"}
+allowed = {"math", "re", "collections", "statistics", "zipfile", "io"}
 names = "abs all any bool dict enumerate filter float getattr hasattr int len list map max min print range repr round set sorted str sum tuple type zip Exception ValueError TypeError KeyError IndexError".split()
 safe = {k: getattr(builtins, k) for k in names if hasattr(builtins, k)}
 def imp(name, *args, **kwargs):
@@ -20,9 +20,15 @@ def imp(name, *args, **kwargs):
         return __import__(name, *args, **kwargs)
     raise ImportError("module not allowed: " + name)
 safe["__import__"] = imp
+class _AttrDict(dict):
+    def __getattr__(self, k):
+        try:
+            return self[k]
+        except KeyError:
+            raise AttributeError(k)
 def obj(v):
     if isinstance(v, dict):
-        return types.SimpleNamespace(**{k: obj(x) for k, x in v.items()})
+        return _AttrDict({k: obj(x) for k, x in v.items()})
     if isinstance(v, list):
         return [obj(x) for x in v]
     return v
@@ -83,13 +89,19 @@ def _run_opensandbox(code: str, variables: Dict[str, Any],
     domain = os.environ.get("OPEN_SANDBOX_DOMAIN")
     if not domain:
         return {"error": "OPEN_SANDBOX_DOMAIN is required for OpenSandbox"}
+    # The variables payload (all packets/flows/alerts) can exceed 1 MB as
+    # base64. Embedding it in argv blows past Linux MAX_ARG_STRLEN (~128 KB)
+    # and the execd silently drops the command. Write it to a file inside the
+    # container instead and have the child read it back.
+    payload_path = "/tmp/easyshark_payload.b64"
     payload = json.dumps({"code": code, "variables": _jsonable(variables)})
     payload64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
     child = _CHILD.replace(
         "import json, sys, types, builtins",
         "import json, sys, types, builtins, base64").replace(
         "payload = json.load(sys.stdin)",
-        f"payload = json.loads(base64.b64decode({payload64!r}))")
+        "payload = json.loads(base64.b64decode(open("
+        + repr(payload_path) + ", 'rb').read()))")
     child64 = base64.b64encode(child.encode("utf-8")).decode("ascii")
     command = ("python -c \"import base64;exec(compile(base64.b64decode('" +
                child64 + "'),'<easyshark-opensandbox>','exec'))\"")
@@ -103,9 +115,14 @@ def _run_opensandbox(code: str, variables: Dict[str, Any],
         sandbox = SandboxSync.create(
             os.environ.get("EASYSHARK_SANDBOX_IMAGE", "python:3.12-slim"),
             connection_config=config,
-            timeout=timedelta(seconds=max(30.0, timeout + 10.0)),
+            timeout=timedelta(seconds=max(60.0, timeout + 10.0)),
             resource={"cpu": "1", "memory": "256Mi"},
             network_policy=NetworkPolicy(defaultAction="deny", egress=[]))
+        try:
+            sandbox.files.write_file(
+                payload_path, payload64 + "\n", encoding="utf-8")
+        except Exception as exc:
+            return {"error": f"OpenSandbox payload upload failed: {exc}"}
         execution = sandbox.commands.run(command)
         stdout = "".join(getattr(item, "text", str(item))
                          for item in execution.logs.stdout)

@@ -13,7 +13,7 @@ transcript it was based on, the critic:
 If not approved, the DAG runner retries the executor once with the
 issues fed back. Max 1 retry per hypothesis (no infinite loop).
 
-All LLM calls go through LLMClient (OpenRouter → Ollama → Groq with the
+All LLM calls go through LLMClient (Zen → OpenRouter → Groq with the
 Phase 9 rate limiter). Uses the "critic" role = OPENROUTER_CRITIC_MODEL.
 """
 from __future__ import annotations

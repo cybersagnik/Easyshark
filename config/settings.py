@@ -9,7 +9,7 @@ Architecture (from EasyShark master brief §1):
     - PCAP / cache
 
   ACTIVE sections (the LLM layer — primary work zone):
-    - OLLAMA_* constants (primary transport, on-WSL local inference)
+    
     - GROQ_* constants (optional cloud fallback)
     - Tool-calling knobs
 """
@@ -24,7 +24,7 @@ def _load_dotenv(path: Path) -> None:
 
     Reads KEY=VALUE lines into os.environ WITHOUT overriding values that
     are already set (standard dotenv semantics). Empty values are treated
-    as unset so `OLLAMA_BASE_URL=` in .env does not clobber the default.
+    as unset so empty values in .env do not clobber defaults.
     """
     try:
         if not path.exists():
@@ -44,46 +44,6 @@ def _load_dotenv(path: Path) -> None:
 
 
 _load_dotenv(BASE_DIR / ".env")
-
-# ---------------------------------------------------------------------------
-# Ollama local transport (offline fallback)
-# ---------------------------------------------------------------------------
-# Ollama runs on WSL2 on 127.0.0.1:11434. Override via env if remote.
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-
-# Per-request timeout. Small models on CPU can be slow (30-90s/tool call).
-OLLAMA_TIMEOUT  = 90
-
-# Role -> Ollama model identifier mapping. Small, CPU-friendly models.
-# Override per role via env (e.g. OLLAMA_EXPLAINER_MODEL=qwen2.5:14b).
-#
-# The brief maps Groq roles like this:
-#   planner   -> llama-3.1-8b-instant       (intent parsing)
-#   explainer -> llama-3.3-70b-versatile     (SOC reasoning)
-#   coder     -> qwen/qwen3.6-27b            (code + rule generation)
-#
-# For WSL with 7.4 GB RAM we use SMALLER Ollama equivalents:
-#   planner   -> llama3.2:3b  (~2 GB) — fast enough for intent parsing
-#   explainer -> qwen2.5:7b   (~4.7 GB) — strong enough for tool-calling
-#   coder     -> qwen2.5:7b   (~4.7 GB) — good at structured output
-#
-# If the small models need more headroom, switch to:
-#   planner   -> qwen2.5:3b
-#   explainer -> llama3.2:3b  (or qwen2.5:7b)
-OLLAMA_MODELS = {
-    "planner":   "llama3.2:3b",
-    "explainer": "qwen2.5:7b",
-    "coder":     "qwen2.5:7b",
-    "critic":    "qwen2.5:7b",
-}
-
-for _role in ("planner", "explainer", "coder", "critic"):
-    _env_key = f"OLLAMA_{_role.upper()}_MODEL"
-    if os.environ.get(_env_key):
-        OLLAMA_MODELS[_role] = os.environ[_env_key]
-
-# Master switch for Ollama. Set OLLAMA_ENABLED=0 to bypass entirely.
-OLLAMA_ENABLED = os.environ.get("OLLAMA_ENABLED", "1") != "0"
 
 # ---------------------------------------------------------------------------
 # Groq cloud — optional. Disabled by default in this build.
@@ -110,7 +70,7 @@ if GROQ_MODEL:
         GROQ_MODELS[_k] = GROQ_MODEL
 # Phase 16 — per-role Groq overrides take precedence over GROQ_MODEL
 # (e.g. GROQ_EXPLAINER_MODEL=llama-3.3-70b-versatile). Mirrors the
-# OLLAMA_* / ZEN_* / OPENROUTER_* per-role override pattern.
+# ZEN_* / OPENROUTER_* / GROQ_* per-role override pattern.
 for _role in ("planner", "explainer", "coder", "critic"):
     _env_key = f"GROQ_{_role.upper()}_MODEL"
     if os.environ.get(_env_key):
@@ -121,18 +81,15 @@ GROQ_MAX_TOKENS = 1024
 GROQ_MAX_TOKENS_TOOLS = 2048
 
 # Per-role temperature defaults. Lower = more deterministic output.
-# Small Ollama models do best at low temperature — keep them strict.
-OLLAMA_TEMPERATURE = {
+# Cloud models (Zen/Groq) are instruction-tuned for tool-calling.
+SYSTEM_TEMPERATURE = {
     "planner":   0.1,      # deterministic for tool decisions
     "explainer": 0.2,      # slightly creative for explanations
     "coder":     0.1,      # strict output format
     "critic":    0.1,      # strict verification
 }
 
-# Gap 5 — Zen (primary transport) per-role temperatures. The classic
-# GROQ_TEMPERATURE block was dead config (never referenced); replaced with
-# the backend that actually handles the traffic. Slightly more creative
-# than Ollama because Zen models are instruction-tuned for tool-calling.
+# Gap 5 — Zen (primary transport) per-role temperatures.
 ZEN_TEMPERATURE = {
     "planner":   0.1,
     "explainer": 0.3,
@@ -162,13 +119,12 @@ EXPORT_DIR = "./exported"
 # ---------------------------------------------------------------------------
 # System prompts
 #
-# Tuned for SMALL Ollama models (llama3.2:3b / qwen2.5:7b).
-# Three rules when writing prompts for these models:
+# Tuned for cloud models (Zen/Groq). Three rules:
 #   1. Be EXPLICIT about the output format — show the exact template.
 #   2. Constrain vocabulary — small models hallucinate domain terms.
 #   3. Tell the model to call tools BY NAME — no invented tool names.
 # ---------------------------------------------------------------------------
-OLLAMA_SYSTEM_PROMPTS = {
+SYSTEM_PROMPTS = {
     "planner": (
         "You are the command router for a packet-capture analysis shell.\n"
         "The analyst types natural-language questions; you decide which "
@@ -214,6 +170,8 @@ OLLAMA_SYSTEM_PROMPTS = {
         "  - get_packet_detail\n"
         "  - list_flows\n"
         "  - compute_packets\n"
+        "  - extract_embedded_media (extracts embedded images/media from a\n"
+        "    .docx attachment and SAVES them to a host path the analyst gives)\n"
         "  - python_eval (only if enabled; LAST resort for computations no\n"
         "    fixed tool can express)\n"
         "  - create_tool (only if enabled; defines a NEW sandboxed tool at\n"
@@ -223,6 +181,7 @@ OLLAMA_SYSTEM_PROMPTS = {
         "  File transferred over IM: extract_files\n"
         "  SMTP creds: get_smtp_credentials\n"
         "  Email attachments: get_email_attachments\n"
+        "  Embedded image in docx -> SAVE to path: extract_embedded_media\n"
         "  Packets to port from IP: apply_display_filter (or search_payloads) -> get_packet_detail\n"
         "  Ad-network / domain: search_payloads with regex 'at.atwola|ads\\\\.|adiframe|addyn|doubleclick'\n"
         "  Docx / file content: extract_files lists carved .docx blobs (format,\n"
@@ -299,16 +258,15 @@ OLLAMA_SYSTEM_PROMPTS = {
     ),
 }
 
-# Groq uses the same prompts but slightly looser (larger models tolerate
-# less hand-holding). Kept identical here for simplicity.
-GROQ_SYSTEM_PROMPTS = OLLAMA_SYSTEM_PROMPTS
+# Groq uses the same prompts. Kept identical here for simplicity.
+GROQ_SYSTEM_PROMPTS = SYSTEM_PROMPTS
 
 # ---------------------------------------------------------------------------
 # OpenCode Zen cloud — PRIMARY transport (replaces OpenRouter, 2026-08-03).
 # ---------------------------------------------------------------------------
 # Zen is the OpenAI-compatible endpoint at opencode.ai/zen/v1. The agentic
 # DAG (planner->executor->critic) needs tool calling; all Zen free models
-# support it. Ollama/Groq remain as local/last-resort fallbacks.
+# support it. Groq remains as last-resort fallback.
 # NOTE: requests MUST send a browser-like User-Agent header or Cloudflare
 # returns 403 (error code 1010) — handled inside llm_client._zen_* methods.
 ZEN_ENABLED = os.environ.get("ZEN_ENABLED", "0") != "0"

@@ -415,8 +415,8 @@ class TrafficExplainer:
                 lines.append(f"  - {at}: {count}")
         lines.append(f"\nQuery: {question}")
         lines.append(
-            "\n(Note: no AI backend reachable. Start Ollama or set "
-            "GROQ_ENABLED=1 with a valid GROQ_API_KEY.)"
+            "\n(Note: no AI backend reachable. Check cloud provider keys "
+            "ZEN/OPENROUTER/GROQ in .env.)"
         )
         return "\n".join(lines)
 

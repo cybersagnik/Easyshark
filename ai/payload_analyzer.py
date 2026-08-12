@@ -298,8 +298,12 @@ def decode_smtp_auth_credentials(packets) -> List[Dict[str, Any]]:
     return creds
 
 
-def parse_smtp_attachments(packets) -> List[Dict[str, Any]]:
-    """Walk SMTP DATA payloads; extract MIME multipart attachments."""
+def parse_smtp_attachments(packets, include_data: bool = False) -> List[Dict[str, Any]]:
+    """Walk SMTP DATA payloads; extract MIME multipart attachments.
+
+    ``include_data=True`` adds the raw decoded ``data`` bytes per attachment
+    so callers can write the file to disk (used by the extract_embedded_media
+    and extract-emails capabilities)."""
     out: List[Dict[str, Any]] = []
     flows: Dict[Tuple, bytes] = {}
     for pkt in packets:
@@ -347,6 +351,7 @@ def parse_smtp_attachments(packets) -> List[Dict[str, Any]]:
                 text = _peek_docx(body)
             text = re.sub(r"\s+", " ", text).strip()
             media_md5s: List[str] = []
+            media_names: List[str] = []
             if filename.lower().endswith((".docx",)):
                 try:
                     zf = zipfile.ZipFile(io.BytesIO(body))
@@ -354,16 +359,21 @@ def parse_smtp_attachments(packets) -> List[Dict[str, Any]]:
                         if "media" in name.lower() or name.lower().endswith(
                                 (".png", ".jpg", ".jpeg", ".emf", ".wmf", ".bmp", ".gif")):
                             media_md5s.append(_md5(zf.read(name)))
+                            media_names.append(name)
                 except Exception:
                     pass
-            out.append({
+            entry = {
                 "flow": str(key),
                 "filename": filename,
                 "size": len(body),
                 "md5": md5,
                 "text": text,
                 "media_md5s": media_md5s,
-            })
+                "media_names": media_names,
+            }
+            if include_data:
+                entry["data"] = body
+            out.append(entry)
     return out
 
 

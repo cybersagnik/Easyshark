@@ -221,9 +221,9 @@ _ALL_KNOWN_VERBS = (
 #
 # Decomposes an analyst's investigation question into a DAG of up to 5
 # testable hypotheses, each with tool hints and dependencies. Uses the
-# small/fast planner role (OPENROUTER_PLANNER_MODEL, Ollama fallback
+# small/fast planner role (OPENROUTER_PLANNER_MODEL, cloud fallback
 # llama3.2:3b). Every LLM call goes through LLMClient so the Phase 8
-# OpenRouter→Ollama→Groq chain and the Phase 9 rate limiter apply.
+# Zen→OpenRouter→Groq chain and the Phase 9 rate limiter apply.
 # ===========================================================================
 HYPOTHESIS_PLAN_SYSTEM_PROMPT = """You are a senior SOC investigation planner. Given an analyst's question
 about a packet capture, plus a protocol triage summary and a list of

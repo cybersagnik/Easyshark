@@ -165,7 +165,7 @@ class InvestigateCommandHandler:
         if not auto and (getattr(self.shell, "llm_client", None) is None or
                          not self.shell.llm_client.is_available()):
             return ("LLM client unavailable. Cannot run investigation.\n"
-                    "  Start Ollama:  ollama serve")
+                    "  Check cloud provider keys (ZEN/OPENROUTER/GROQ) in .env")
         if auto and (getattr(self.shell, "llm_client", None) is None or
                      not self.shell.llm_client.is_available()):
             _live("  no LLM backend available — using deterministic analysis")

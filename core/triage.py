@@ -23,7 +23,7 @@ Capabilities:
                           >= 7.5 bits per 256-byte window (typical of
                           compressed/encrypted traffic).
 
-All signals are computed deterministically, no LLM, no Ollama probes.
+All signals are computed deterministically, no LLM, no cloud probes.
 Target latency: ~50 ms on a 600-packet capture.
 
 Public API:

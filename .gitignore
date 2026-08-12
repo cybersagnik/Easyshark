@@ -10,6 +10,7 @@ response-*.txt
 /tmp_opencode/
 project_shift.md
 context.md
+Final.md
 .easyshark/
 tmp/coverage_report.md
 tmp/*.jsonl

@@ -12,7 +12,7 @@ Phase 6 additions:
     context of {packets, flows, alerts, stats, pcap}. 5-second wall-clock
     timeout, 50 MB RSS cap. No network, no subprocess, no file I/O.
   - Each tool schema's description carries 2-3 few-shot invocation
-    examples (Task 6.4) so the small Ollama models pick the right
+    examples (Task 6.4) so the models pick the right
     tool the first time without inventing tool names.
 """
 from __future__ import annotations
@@ -336,6 +336,78 @@ def tool_get_email_attachments(args: Dict[str, Any], ctx: ToolContext) -> Dict[s
     return {"count": len(attachments),
             "attachments": attachments,
             "envelope": envelope}
+
+
+# ---------------------------------------------------------------------------
+# Tool 9b: extract_embedded_media — save embedded media from a .docx to disk
+# ---------------------------------------------------------------------------
+def tool_extract_embedded_media(args: Dict[str, Any], ctx: ToolContext) -> Dict[str, Any]:
+    """Extract embedded media files (word/media/*) from a .docx SMTP
+    attachment and write them to a host path the analyst chooses.
+
+    Deterministic host-side capability — the docx bytes are re-carved from
+    the capture, unzipped, and each media entry is written to ``output_dir``.
+    This works regardless of the LLM/sandbox because the container cannot
+    reach the host filesystem.
+
+    Args:
+        output_dir (required): absolute path to save the media files into.
+        output_prefix (optional): prefix for saved filenames
+            (default: original archive entry basename).
+    """
+    from ai.payload_analyzer import parse_smtp_attachments
+    output_dir = (args.get("output_dir") or "").strip()
+    if not output_dir:
+        return {"error": "extract_embedded_media: 'output_dir' is required"}
+    import os as _os
+    from pathlib import Path as _Path
+    try:
+        out_root = _Path(output_dir).expanduser().resolve()
+        out_root.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return {"error": f"extract_embedded_media: cannot create output_dir: {exc}"}
+
+    packets = list(getattr(ctx, "packets", []) or [])
+    atts = parse_smtp_attachments(packets, include_data=True) if packets else []
+    saved = []
+    for a in atts:
+        filename = a.get("filename", "")
+        if not filename.lower().endswith(".docx"):
+            continue
+        body = a.get("data") or b""
+        media_names = a.get("media_names") or []
+        if not media_names:
+            continue
+        import zipfile, io
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(body))
+        except Exception:
+            continue
+        for name in media_names:
+            try:
+                raw = zf.read(name)
+            except Exception:
+                continue
+            base = _os.path.basename(name) or "media.bin"
+            prefix = (args.get("output_prefix") or "").strip()
+            safe = prefix + base if not prefix.endswith(("/", "_")) else prefix + base
+            target = out_root / safe
+            try:
+                target.write_bytes(raw)
+            except Exception as exc:
+                return {"error": f"extract_embedded_media: write failed {target}: {exc}"}
+            saved.append({
+                "archive_entry": name,
+                "filename": safe,
+                "path": str(target),
+                "size": len(raw),
+                "md5": _md5(raw),
+            })
+    if not saved:
+        return {"error": "extract_embedded_media: no .docx attachments with "
+                         "embedded media found in this capture"}
+    return {"count": len(saved), "saved": saved,
+            "output_dir": str(out_root)}
 
 
 # ---------------------------------------------------------------------------
@@ -823,7 +895,11 @@ def run_python_eval(code: str, ctx: ToolContext,
         }
         if extra_globals:
             variables.update(extra_globals)
-        return run_isolated(code, variables, timeout=_PY_EVAL_TIMEOUT_SEC)
+        _eval_start = _perf_counter()
+        result = run_isolated(code, variables, timeout=_PY_EVAL_TIMEOUT_SEC)
+        _log_python_eval(code, result,
+                         (_perf_counter() - _eval_start) * 1000, ctx)
+        return result
 
     start = _perf_counter()
 
@@ -1242,6 +1318,7 @@ TOOL_EXECUTORS: Dict[str, Callable[[Dict[str, Any], ToolContext], Dict[str, Any]
     "python_eval":          tool_python_eval,
     "create_tool":          tool_create_tool,
     "compute_packets":      tool_compute_packets,
+    "extract_embedded_media": tool_extract_embedded_media,
     # Phase 15 — dissection-aware tools.
     "get_http_requests":    tool_get_http_requests,
     "get_dns_queries":      tool_get_dns_queries,
@@ -1427,6 +1504,36 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "  -> 'recipient of the docx email?' -> get_email_attachments()"
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_embedded_media",
+            "description": (
+                "Extract embedded media files (word/media/*) from a .docx "
+                "email attachment and SAVE them to a host path the analyst "
+                "chooses. Deterministic host-side capability — the docx bytes "
+                "are re-carved from the capture and unzipped; each media file "
+                "is written to output_dir. Use ONLY when the analyst asks to "
+                "save/extract the image (or embedded file) from a docx to a "
+                "path. Output is the saved filenames, md5s and full paths.\n"
+                "Examples:\n"
+                "  -> extract_embedded_media({\"output_dir\": \"/tmp/extracted\"})\n"
+                "  -> 'extract the image from the docx to /mnt/d/output/' "
+                "    -> extract_embedded_media({\"output_dir\": \"/mnt/d/output\"})"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_dir": {"type": "string",
+                                   "description": "Absolute host path to save "
+                                                  "the extracted media into."},
+                    "output_prefix": {"type": "string",
+                                      "description": "Optional filename prefix."},
+                },
+                "required": ["output_dir"],
+            },
         },
     },
     {

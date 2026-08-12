@@ -6,7 +6,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from ai.llm_client import LLMClient, _OllamaCompatResponse
+from ai.llm_client import LLMClient, _CompatResponse
 from ai.tool_registry import ToolContext
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +19,7 @@ def _resp(content=None, tool_calls=None, reasoning_content=None):
         msg["tool_calls"] = tool_calls
     if reasoning_content:
         msg["reasoning_content"] = reasoning_content
-    return _OllamaCompatResponse(
+    return _CompatResponse(
         {"choices": [{"message": msg}], "usage": {}})
 
 

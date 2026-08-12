@@ -216,10 +216,10 @@ def _single_completion(llm_client, system: str, user: str,
     """Send one-shot completion. Raises RuntimeError on backend failure."""
     if llm_client is None or not getattr(llm_client, "is_available", lambda: False)():
         return None
-    saved = getattr(llm_client, "ollama_timeout", None)
+    saved = getattr(llm_client, "timeout", None)
     try:
         if saved is not None:
-            llm_client.ollama_timeout = max(saved, timeout_sec)
+            llm_client.timeout = max(saved, timeout_sec)
         response = llm_client._call_messages(
             messages=[{"role": "system", "content": system},
                       {"role": "user",   "content": user}],
@@ -229,7 +229,7 @@ def _single_completion(llm_client, system: str, user: str,
         )
     finally:
         if saved is not None:
-            llm_client.ollama_timeout = saved
+            llm_client.timeout = saved
     if response is None:
         return None
     try:

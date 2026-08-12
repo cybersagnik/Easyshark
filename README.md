@@ -273,16 +273,8 @@ EASYSHARK_SANDBOX_BACKEND=opensandbox  # require Docker container
 EASYSHARK_SANDBOX_BACKEND=local  # in-process only
 ```
 
----
-
-### Optional Features (Under Testing)
-
-These features are functional and tested but are considered additive to the
-core workflow. They may see API changes as development continues.
-
-#### Forensic Tooling
-
-**22 deterministic forensic tools.** Read-only tools gated by triage flags:
+**22 deterministic forensic tools.** Read-only tools gated by triage flags,
+exposed to the LLM during analysis:
 
 | Tool | What it does |
 |---|---|
@@ -306,12 +298,6 @@ horizontal/vertical port scan, protocol-port mismatch, lateral movement, long
 connections, domain reputation signals, TLS fingerprint anomalies, and
 prompt-injection payload detection. All deterministic, no LLM required.
 
-**Incident reports with MITRE mapping.** `report` runs detectors -> narrative
-compression -> single LLM synthesis call, producing an incident narrative,
-suspect hosts, MITRE ATT&CK techniques, IOCs, and next steps. A confidence
-gate skips the LLM call when anomaly scores are too low. Exports include
-`--mitre`, `--sigma`, and `--spl`.
-
 **TLS fingerprinting.** JA3/JA4-style ClientHello metadata analysis.
 
 **Packet anonymizer.** `core.anonymizer.Anonymizer` creates safe packet
@@ -321,6 +307,24 @@ metadata for external model calls without modifying the original capture.
 observation envelopes. Instruction-like payloads are detected as security
 findings and blocked from the response path. Red-team fixtures validate 10/10
 malicious payload detection with 0/3 false positives.
+
+**Session persistence + memory.** Sessions saved automatically, resumable via
+`--session <key>` or `--session latest`. Action log via `events` command.
+LLM tool-call memory via `memory` command.
+
+---
+
+### Optional Features (Under Testing)
+
+These features are functional and tested but are considered additive to the
+core workflow. They may see API changes as development continues.
+
+#### Incident Reports
+
+`report` runs detectors -> narrative compression -> single LLM synthesis call,
+producing an incident narrative, suspect hosts, MITRE ATT&CK techniques, IOCs,
+and next steps. A confidence gate skips the LLM call when anomaly scores are
+too low. Exports include `--mitre`, `--sigma`, and `--spl`.
 
 #### CYSOC SOC Workspace
 
@@ -349,15 +353,21 @@ See [`README-CYSOC.md`](README-CYSOC.md) for the complete command reference.
   and cached locally.
 - **IOC auto-annotation.** Badges in reports and investigations: `KNOWN
   MALICIOUS`, `CLEAN`, `UNKNOWN`.
-- **Synthetic PCAP corpus.** 7 deterministically generated captures (beaconing,
-  DNS tunnel, exfiltration, port scan, prompt injection, benign control) with
-  hash-pinned manifest for regression testing. Oracle scoring reports
-  precision, recall, Brier score, and ECE.
 
-#### Deployment + Integration
+#### RSI Pattern Learning
 
-- **Session persistence.** Sessions saved automatically, resumable via
-  `--session <key>` or `--session latest`.
+Tool and prompt patterns are promoted only from independent oracle outcomes.
+Requires 3 labels at >= 0.75 for activation, retired below 0.40.
+
+#### Synthetic PCAP Corpus + Oracle
+
+7 deterministically generated captures (beaconing, DNS tunnel, exfiltration,
+port scan, prompt injection, benign control) with hash-pinned manifest for
+regression testing. Oracle scoring reports precision, recall, Brier score,
+and ECE.
+
+#### Deployment Tooling
+
 - **SIEM/SOAR integration.** `--event-log` writes versioned JSONL envelopes for
   ingestion. `--event-webhook` sends the same envelopes over HTTPS with retry
   and persistence.
@@ -365,9 +375,6 @@ See [`README-CYSOC.md`](README-CYSOC.md) for the complete command reference.
   `--health-port 8765` and `EASYSHARK_HEALTH_TOKEN` for auth.
 - **Docker + docker-compose.** Monorepo includes `Dockerfile` and
   `docker-compose.yml`.
-- **RSI pattern learning.** Tool and prompt patterns are promoted only from
-  independent oracle outcomes. Requires 3 labels at >= 0.75 for activation,
-  retired below 0.40.
 - **Observability counters.** `core.observability` exposes counters; audit
   logging via `core.audit`.
 

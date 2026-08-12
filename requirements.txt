@@ -5,6 +5,4 @@ requests>=2.31.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 opensandbox>=0.1.14
-# groq is OPTIONAL; the project runs on Ollama by default.
-# Install only if you want the Groq fallback:
-#   pip install groq
+pip install groq

@@ -76,12 +76,16 @@ pcap > soc-analyst terminal
 
 ### Simple view
 
-```
-Input:    PCAP file | Live capture | --monitor directory
-Core:     Dissector (12 protocols) -> Triage -> Tool Registry (22 tools)
-          -> LLM Tool Loop (Zen -> OpenRouter -> Groq)
-Output:   analyze answers | investigate reports | CYSOC cases
-          | Autonomous JSON reports | SIEM/SOAR events
+```mermaid
+graph LR
+    I[PCAP / Live / Monitor] --> C[Dissector + Triage]
+    C --> R[Tool Registry<br/>22 tools]
+    R --> L[LLM Tool Loop<br/>Zen -> OpenRouter -> Groq]
+    L --> O[analyze answers]
+    C --> O2[investigate reports]
+    R --> O3[CYSOC cases]
+    R --> O4[Autonomous JSON reports]
+    R --> O5[SIEM/SOAR events]
 ```
 
 ### Compared to Wireshark

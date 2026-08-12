@@ -5,4 +5,4 @@ requests>=2.31.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 opensandbox>=0.1.14
-pip install groq
+# pip install groq (if you want groq support)

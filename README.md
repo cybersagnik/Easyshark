@@ -226,15 +226,63 @@ pcap > extract-media /tmp/extracted
 
 ## Features
 
-### Forensic Analysis
+### Core Features
 
-**Natural-language Q&A.** Ask questions in plain English. The LLM calls the
-right forensic tool, cites evidence, and returns a sourced answer. A
-deterministic premise-mismatch gate refuses questions about protocols the
-capture does not contain. Claim grounding and hallucination detection flag
-unsupported claims.
+**Natural-language Q&A (`analyze`).** Ask questions in plain English. The LLM
+calls the right forensic tool, cites evidence, and returns a sourced answer
+with claim grounding and hallucination detection. A deterministic
+premise-mismatch gate refuses questions about protocols the capture does not
+contain.
 
-**22 deterministic forensic tools.** Read-only tools including:
+```
+pcap > analyze What SMTP credentials were used?
+pcap > analyze What is the MD5 of the AIM file transfer?
+pcap > analyze compute the standard deviation of UDP packet sizes
+```
+
+**Multi-hypothesis investigation (`investigate`).** Generates ranked
+hypotheses, verifies each via the tool loop (planner -> executor -> critic),
+and concludes with a structured incident report. Supports `--auto` for
+non-interactive runs.
+
+```
+pcap > investigate What happened in this capture?
+pcap > investigate Who exfiltrated data? --auto
+```
+
+**Autonomous headless mode (`--autonomous`).** Runs the full pipeline without
+an interactive shell. The PCAP directory monitor (`--monitor`) watches a
+directory and runs the autonomous pipeline on each new capture. Jobs are
+persisted in `jobs.db` and retried up to three times.
+
+```bash
+python3 main.py capture.pcap --autonomous --mission "Investigate exfiltration"
+python3 main.py --monitor ./captures --interval 30 --mission "Triage all captures"
+```
+
+**Sandboxed Python execution.** LLM-generated code runs in an isolated sandbox:
+in-process (restricted builtins, banlist, 5s timeout) or Docker container via
+OpenSandbox (deny-by-default egress, CPU/memory limits, destroyed after each
+run). The payload is written to a file inside the container to avoid argv
+length limits. Also enables `create_tool` — the LLM can define new sandboxed
+tools at runtime when no existing tool fits the question.
+
+```
+EASYSHARK_SANDBOX_BACKEND=auto   # try container, fall back to in-process
+EASYSHARK_SANDBOX_BACKEND=opensandbox  # require Docker container
+EASYSHARK_SANDBOX_BACKEND=local  # in-process only
+```
+
+---
+
+### Optional Features (Under Testing)
+
+These features are functional and tested but are considered additive to the
+core workflow. They may see API changes as development continues.
+
+#### Forensic Tooling
+
+**22 deterministic forensic tools.** Read-only tools gated by triage flags:
 
 | Tool | What it does |
 |---|---|
@@ -253,11 +301,16 @@ SSH, IRC, SMB, NBNS, IMAP, POP3 extracted at load time.
 **8 deterministic info commands.** `protocols`, `ips`, `flows`, `files`,
 `dns`, `creds`, `summary`, `extract-media` — all work fully offline.
 
-**Sandboxed Python execution.** LLM-generated code runs in an isolated sandbox:
-in-process (restricted builtins, banlist, 5s timeout) or Docker container via
-OpenSandbox (deny-by-default egress, CPU/memory limits, destroyed after each
-run). The payload is written to a file inside the container to avoid argv
-length limits.
+**8 anomaly detectors.** Beaconing, DNS entropy/tunnelling, exfiltration ratio,
+horizontal/vertical port scan, protocol-port mismatch, lateral movement, long
+connections, domain reputation signals, TLS fingerprint anomalies, and
+prompt-injection payload detection. All deterministic, no LLM required.
+
+**Incident reports with MITRE mapping.** `report` runs detectors -> narrative
+compression -> single LLM synthesis call, producing an incident narrative,
+suspect hosts, MITRE ATT&CK techniques, IOCs, and next steps. A confidence
+gate skips the LLM call when anomaly scores are too low. Exports include
+`--mitre`, `--sigma`, and `--spl`.
 
 **TLS fingerprinting.** JA3/JA4-style ClientHello metadata analysis.
 
@@ -269,54 +322,28 @@ observation envelopes. Instruction-like payloads are detected as security
 findings and blocked from the response path. Red-team fixtures validate 10/10
 malicious payload detection with 0/3 false positives.
 
-### Agentic Investigation
+#### CYSOC SOC Workspace
 
-**Hypothesis DAG.** `investigate` generates ranked hypotheses, verifies each
-via the tool loop (planner -> executor -> critic), and concludes with a
-structured incident report. Supports `--auto` for non-interactive runs.
-
-**Autonomous headless mode.** `--autonomous --mission "..."` runs the full
-pipeline without an interactive shell. Reports are saved to
-`~/.easyshark/reports/`.
-
-**PCAP directory monitor.** `--monitor ./captures --interval 30` watches a
-directory and runs the autonomous pipeline on each new capture. Jobs are
-persisted in `jobs.db` and retried up to three times.
-
-**CYSOC Terminal.** A dedicated SOC workspace opened from the shell:
+A dedicated SOC terminal with alert queue, case management, entity hunting,
+multi-sensor fusion, behavioral baselines, oracle benchmarking,
+approval-gated response, and threat intel feeds.
 
 ```
-pcap > soc-analyst terminal
+pcap > cysoc-terminal
 cysoc > overview
 cysoc > queue p1,p2
 cysoc > case create P1 Suspected C2 beacon
 cysoc > hunt 192.168.1.159
 cysoc > correlate FIN-LAPTOP-22
-cysoc > fuse
-cysoc > similar CYSOC-20260812-AB12
-cysoc > campaign build CYSOC-20260812-AB12
 cysoc > baseline check FIN-LAPTOP-22 bytes_out 5000000
 cysoc > action request CYSOC-20260812-AB12 Isolate FIN-LAPTOP-22
-cysoc > action approve 1 soc-lead
 cysoc > benchmark corpus PCAP_SAMPLES/generated/manifest.json
 cysoc > oracle
-cysoc > response local CYSOC-20260812-AB12 watchlist bad.example 3600
 ```
 
 See [`README-CYSOC.md`](README-CYSOC.md) for the complete command reference.
 
-**Incident reports with MITRE mapping.** `report` runs detectors -> narrative
-compression -> single LLM synthesis call, producing an incident narrative,
-suspect hosts, MITRE ATT&CK techniques, IOCs, and next steps. A confidence
-gate skips the LLM call when anomaly scores are too low. Exports include
-`--mitre`, `--sigma`, and `--spl`.
-
-**8 anomaly detectors.** Beaconing, DNS entropy/tunnelling, exfiltration ratio,
-horizontal/vertical port scan, protocol-port mismatch, lateral movement, long
-connections, domain reputation signals, TLS fingerprint anomalies, and
-prompt-injection payload detection. All deterministic, no LLM required.
-
-### Threat Intelligence
+#### Threat Intelligence
 
 - **Feodo Tracker + URLhaus + ThreatFox.** ~24,568 indicators auto-downloaded
   and cached locally.
@@ -327,7 +354,7 @@ prompt-injection payload detection. All deterministic, no LLM required.
   hash-pinned manifest for regression testing. Oracle scoring reports
   precision, recall, Brier score, and ECE.
 
-### Deployment + Integration
+#### Deployment + Integration
 
 - **Session persistence.** Sessions saved automatically, resumable via
   `--session <key>` or `--session latest`.

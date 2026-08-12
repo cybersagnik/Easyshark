@@ -2008,11 +2008,12 @@ Answer concisely with the source evidence (file/email/ip/packet)."""
             # before any new user message (API contract; nudges below break it
             # otherwise, e.g. Zen HTTP 400).
             for (tc, name, args), result in zip(prepared, results):
+                from core.untrusted import quarantine
                 payload = json.dumps({
                     "trust": "untrusted_tool_observation",
                     "instruction_semantics": False,
                     "tool": name,
-                    "data": result,
+                    "data": quarantine(result),
                 }, default=str)
                 if len(payload) > TOOL_RESULT_CHAR_CAP:
                     payload = (payload[:TOOL_RESULT_CHAR_CAP]

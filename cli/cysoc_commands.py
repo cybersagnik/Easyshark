@@ -27,7 +27,7 @@ class CYSOCCommandHandler:
         return verb in {"pulse", "queue", "ingest", "cases", "case", "hunt",
                         "alert", "correlate", "detections", "action", "connector", "connectors",
                         "benchmark", "oracle", "baseline", "similar", "campaign", "response",
-                        "rescore-intel", "fuse"}
+                        "rescore-intel", "fuse", "autotriage"}
 
     def handle(self, line: str) -> str:
         try:
@@ -46,6 +46,8 @@ class CYSOCCommandHandler:
                 return self._alert(args)
             if verb == "ingest":
                 return self._ingest(args)
+            if verb == "autotriage":
+                return self._autotriage(args)
             if verb == "cases":
                 return self._cases(args)
             if verb == "case":
@@ -134,9 +136,24 @@ class CYSOCCommandHandler:
     def _ingest(self, args) -> str:
         if not args:
             return "Usage: ingest <file.json|file.jsonl> [source]"
-        result = self.store.ingest_file(args[0], source=args[1] if len(args) > 1 else "import")
+        result = self.store.ingest_file(
+            args[0], source=args[1] if len(args) > 1 else "import",
+            auto_triage=True)
+        triage = result.get("triage") or {"created": 0, "linked": 0}
         return (f"Ingested {result['events']} new events and {result['alerts']} new alerts "
-                f"from {args[1] if len(args) > 1 else 'import'}.")
+                f"from {args[1] if len(args) > 1 else 'import'}. "
+                f"Auto-triage created {triage['created']} case(s) and linked "
+                f"{triage['linked']} alert(s).")
+
+    def _autotriage(self, args) -> str:
+        if len(args) > 2:
+            return "Usage: autotriage [limit] [window-seconds]"
+        result = self.store.triage_alerts(
+            int(args[0]) if args else 500,
+            int(args[1]) if len(args) > 1 else 3600)
+        return (f"AUTO-TRIAGE processed={result['processed']} linked={result['linked']} "
+                f"created={result['created']} promoted={result['promoted']} "
+                f"cases={len(result['cases'])}")
 
     def _cases(self, args) -> str:
         rows = self.store.cases(args[0] if args else None)
@@ -286,9 +303,13 @@ class CYSOCCommandHandler:
             return f"Generated {result['cases']} labelled synthetic cases. Manifest: {result['manifest']}"
         from ai.oracle import run_corpus
         result = run_corpus(args[1])
+        detector_errors = sum(
+            row.get("false_positives", 0) + row.get("false_negatives", 0)
+            for row in result.get("by_subject", {}).values())
         return (f"ORACLE RUN {result['run_id']} cases={result['cases']} failed={len(result['failed'])} "
                 f"precision={result['precision']} recall={result['recall']} "
-                f"Brier={result['brier']} ECE={result['ece']}")
+                f"Brier={result['brier']} ECE={result['ece']} "
+                f"detectors={len(result.get('by_subject', {}))} errors={detector_errors}")
 
     def _oracle(self, args) -> str:
         from ai.oracle import OracleStore, rederive_report

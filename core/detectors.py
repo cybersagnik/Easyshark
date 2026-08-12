@@ -835,13 +835,15 @@ def detect_prompt_injection(packets, flows) -> List[Anomaly]:
     from core.untrusted import scan_packets
     out = []
     for row in scan_packets(packets):
+        packet_refs = row.get("packets") or [row["packet"]]
         out.append(Anomaly(
             type="prompt_injection_payload", score=.9,
             hosts=[row["src_ip"]] if row.get("src_ip") else [],
             remote=str(row.get("dst_ip") or ""),
             evidence=("Untrusted packet content contains instruction-like text; "
-                      f"packet {row['packet']} was isolated from prompt semantics"),
-            packets=[row["packet"]],
+                      f"packet(s) {','.join(map(str, packet_refs))} were isolated "
+                      "from prompt semantics"),
+            packets=packet_refs,
         ))
     return out
 

@@ -113,6 +113,11 @@ class SOCStore:
               alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
               PRIMARY KEY(case_id, alert_id)
             );
+            CREATE TABLE IF NOT EXISTS triage_groups (
+              correlation_key TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+              last_event REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS case_events (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
@@ -134,7 +139,8 @@ class SOCStore:
     def _rows(rows) -> List[Dict[str, Any]]:
         return [dict(row) for row in rows]
 
-    def ingest_file(self, path: str, source: str = "import") -> Dict[str, int]:
+    def ingest_file(self, path: str, source: str = "import",
+                    auto_triage: bool = False) -> Dict[str, Any]:
         target = Path(path).resolve()
         if not target.is_file():
             raise FileNotFoundError(path)
@@ -153,9 +159,10 @@ class SOCStore:
                 raise ValueError("telemetry file must contain JSON objects")
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise ValueError("telemetry records must be JSON objects")
-        return self.ingest(rows, source=source)
+        return self.ingest(rows, source=source, auto_triage=auto_triage)
 
-    def ingest(self, rows: Iterable[Dict[str, Any]], source: str = "import") -> Dict[str, int]:
+    def ingest(self, rows: Iterable[Dict[str, Any]], source: str = "import",
+               auto_triage: bool = False) -> Dict[str, Any]:
         source = str(source or "import").strip().lower()[:80]
         added_alerts = added_events = 0
         baseline_samples = []
@@ -217,7 +224,110 @@ class SOCStore:
             learning = SOCLearningStore(str(self.path))
             for entity, feature, value, ts in baseline_samples:
                 learning.observe(entity, feature, value, ts)
-        return {"alerts": added_alerts, "events": added_events}
+        result: Dict[str, Any] = {"alerts": added_alerts, "events": added_events}
+        if auto_triage and added_alerts:
+            result["triage"] = self.triage_alerts()
+        return result
+
+    @staticmethod
+    def _correlation_key(alert: Dict[str, Any]) -> str:
+        """Stable entity key; unstructured attacker text never controls grouping."""
+        for field in ("asset", "identity", "ioc", "src_ip", "dst_ip"):
+            value = str(alert.get(field) or "").strip().lower()
+            if value:
+                return f"{field}:{value}"
+        return "alert:" + str(alert["id"])
+
+    def triage_alerts(self, limit: int = 500,
+                      window_seconds: int = 3600) -> Dict[str, Any]:
+        """Link untriaged alerts into deterministic, time-bounded SOC cases."""
+        limit = max(1, min(5000, int(limit)))
+        window = max(60, min(7 * 86400, int(window_seconds)))
+        priority_for = {"critical": "P1", "high": "P2",
+                        "medium": "P3", "low": "P4", "info": "P4"}
+        rank = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
+        created = promoted = linked = 0
+        case_ids: List[str] = []
+        from core.untrusted import injection_signals, quarantine
+
+        with self._connect() as db:
+            alerts = self._rows(db.execute("""
+              SELECT a.* FROM alerts a
+              LEFT JOIN case_alerts ca ON ca.alert_id=a.id
+              WHERE ca.alert_id IS NULL AND a.status IN ('new','acknowledged')
+              ORDER BY a.event_ts,a.id LIMIT ?
+            """, (limit,)))
+            for alert in alerts:
+                correlation_key = self._correlation_key(alert)
+                event_ts = float(alert["event_ts"])
+                group = db.execute("""
+                  SELECT tg.case_id,tg.last_event,c.priority,c.status
+                  FROM triage_groups tg JOIN cases c ON c.id=tg.case_id
+                  WHERE tg.correlation_key=?
+                """, (correlation_key,)).fetchone()
+                reuse = bool(group and group["status"] not in ("closed", "resolved") and
+                             abs(event_ts - float(group["last_event"])) <= window)
+                priority = priority_for.get(str(alert["severity"]).lower(), "P3")
+                suspicious_text = " ".join(str(alert.get(field) or "") for field in
+                                           ("title", "description", "rule_name", "raw"))
+                injection = bool(injection_signals(suspicious_text))
+
+                if reuse:
+                    case_id = str(group["case_id"])
+                    if rank[priority] < rank.get(str(group["priority"]), 4):
+                        db.execute("UPDATE cases SET priority=?,updated=? WHERE id=?",
+                                   (priority, time.time(), case_id))
+                        db.execute("""INSERT INTO case_events
+                          (case_id,event_ts,kind,actor,message,data) VALUES(?,?,?,?,?,?)""",
+                          (case_id, time.time(), "priority_promoted", "easyshark",
+                           f"Priority promoted to {priority} by alert {alert['id']}",
+                           json.dumps({"alert_id": alert["id"], "priority": priority})))
+                        promoted += 1
+                else:
+                    case_id = f"CYSOC-{time.strftime('%Y%m%d')}-{secrets.token_hex(2).upper()}"
+                    title = quarantine(str(alert["title"]))
+                    if not isinstance(title, str) or not title.strip():
+                        title = "Automatically triaged security alert"
+                    summary = (f"Automatically grouped from {alert['source']} alert "
+                               f"{alert['id']} using a structured entity key.")
+                    if injection:
+                        summary += " Connector text contained quarantined prompt-injection-like content."
+                    now = time.time()
+                    db.execute("""INSERT INTO cases
+                      (id,source_ref,title,priority,status,disposition,summary,created,updated)
+                      VALUES(?,?,?,?,?,?,?,?,?)""",
+                      (case_id, "auto-triage:" + hashlib.sha256(
+                          f"{correlation_key}|{event_ts}|{alert['id']}".encode()).hexdigest(),
+                       title[:500], priority, "review" if injection else "open", "",
+                       summary, now, now))
+                    db.execute("""INSERT INTO case_events
+                      (case_id,event_ts,kind,actor,message,data) VALUES(?,?,?,?,?,?)""",
+                      (case_id, now, "auto_triaged", "easyshark",
+                       "Case created by deterministic alert triage",
+                       json.dumps({"correlation_field": correlation_key.split(":", 1)[0],
+                                   "prompt_injection_suspected": injection})))
+                    created += 1
+
+                db.execute("INSERT OR IGNORE INTO case_alerts(case_id,alert_id) VALUES(?,?)",
+                           (case_id, alert["id"]))
+                db.execute("UPDATE alerts SET status='linked',updated=? WHERE id=?",
+                           (time.time(), alert["id"]))
+                db.execute("UPDATE cases SET updated=? WHERE id=?", (time.time(), case_id))
+                db.execute("""INSERT INTO case_events
+                  (case_id,event_ts,kind,actor,message,data) VALUES(?,?,?,?,?,?)""",
+                  (case_id, time.time(), "alert_auto_linked", "easyshark",
+                   f"Alert linked: {alert['id']}",
+                   json.dumps({"alert_id": alert["id"], "source": alert["source"]})))
+                db.execute("""INSERT INTO triage_groups(correlation_key,case_id,last_event)
+                  VALUES(?,?,?) ON CONFLICT(correlation_key) DO UPDATE SET
+                  case_id=excluded.case_id,
+                  last_event=MAX(triage_groups.last_event,excluded.last_event)""",
+                  (correlation_key, case_id, event_ts))
+                linked += 1
+                if case_id not in case_ids:
+                    case_ids.append(case_id)
+        return {"processed": len(alerts), "created": created, "promoted": promoted,
+                "linked": linked, "cases": case_ids}
 
     def pulse(self) -> Dict[str, Any]:
         with self._connect() as db:

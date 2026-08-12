@@ -1,0 +1,105 @@
+{
+  "cases": [
+    {
+      "description": "Deterministic ICMP baseline with no expected findings",
+      "id": "benign-control",
+      "labels": [],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-benign-control.pcap",
+      "seed": 0,
+      "sha256": "aa8764158ea0be78f062bb53352f3a59e4037cc67a3ed00d79811614529e3b91",
+      "source": "EasyShark deterministic generator"
+    },
+    {
+      "description": "Twenty periodic outbound TCP connection attempts",
+      "id": "beacon",
+      "labels": [
+        "beaconing"
+      ],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-beacon.pcap",
+      "seed": 0,
+      "sha256": "981fe7cda5968f78efd70778f1c0edf11df454ad68fa4774a10374d96a95eb14",
+      "source": "EasyShark deterministic generator"
+    },
+    {
+      "description": "Thirty internal destination/port probes in one minute",
+      "id": "horizontal-scan",
+      "labels": [
+        "port_scan_horizontal",
+        "lateral_movement"
+      ],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-horizontal-scan.pcap",
+      "seed": 0,
+      "sha256": "bf535386d73ffbbea2ee5e0ded76b18ff92e397f69d88ea2ad7ca5c308ffd3a0",
+      "source": "EasyShark deterministic generator"
+    },
+    {
+      "description": "High-entropy DNS query labels",
+      "id": "dns-tunnel",
+      "labels": [
+        "dns_entropy",
+        "domain_reputation"
+      ],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-dns-tunnel.pcap",
+      "seed": 0,
+      "sha256": "fb5842b02d4d36533b9051e655d2537b01e7161369cd3b7d9cf1d25abfe8dcd6",
+      "source": "EasyShark deterministic generator"
+    },
+    {
+      "description": "High outbound-to-inbound byte ratio on one external flow",
+      "id": "exfiltration",
+      "labels": [
+        "exfil_ratio"
+      ],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-exfiltration.pcap",
+      "seed": 0,
+      "sha256": "6bdb2b0c4cf52c15484b6c2e98c19dd868b8ead1cf540f83f560010a7298dc4e",
+      "source": "EasyShark deterministic generator"
+    },
+    {
+      "description": "Instruction-like attacker text in an HTTP header",
+      "id": "prompt-injection-http",
+      "labels": [
+        "prompt_injection_payload"
+      ],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-prompt-injection-http.pcap",
+      "seed": 0,
+      "sha256": "fcb014cf270872bd87874fe6045dd9535adcd8aa0ea9d10d9409a912d9ed3207",
+      "source": "EasyShark deterministic generator"
+    },
+    {
+      "description": "Instruction split across two packets in one flow",
+      "id": "prompt-injection-fragmented",
+      "labels": [
+        "prompt_injection_payload"
+      ],
+      "license": "CC0-1.0",
+      "pcap": "synthetic-prompt-injection-fragmented.pcap",
+      "seed": 0,
+      "sha256": "f6e8dc1753e9d3a255766350f906e3f9fe32c86caea563ba08f19b81dd0905a1",
+      "source": "EasyShark deterministic generator"
+    }
+  ],
+  "detectors": [
+    "beaconing",
+    "dns_entropy",
+    "domain_reputation",
+    "exfil_ratio",
+    "lateral_movement",
+    "port_scan_horizontal",
+    "prompt_injection_payload"
+  ],
+  "provenance": {
+    "generator": "ai.oracle.generate_synthetic_corpus",
+    "generator_version": 2,
+    "kind": "synthetic",
+    "notice": "Synthetic regression fixtures are not an accuracy benchmark.",
+    "seed": 0
+  },
+  "schema": "easyshark.corpus.v2"
+}

@@ -142,6 +142,7 @@ class CYSOCTerminal:
   action approve|deny <id>     Record the response decision; never auto-executes
   connectors                   Data-source readiness and ingestion status
   connector pull <src> <url>   Pull an allow-listed HTTPS JSON endpoint
+  autotriage [limit] [window]  Group unlinked alerts into cases
   benchmark generate <dir>     Generate labelled synthetic PCAP cases
   benchmark corpus <manifest>  Run deterministic corpus oracle and calibration
   oracle                       Precision, recall, Brier, and ECE status

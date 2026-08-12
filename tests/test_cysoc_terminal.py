@@ -59,6 +59,8 @@ class TestCYSOCTerminal(unittest.TestCase):
             action_id = requested.split("#", 1)[1].split()[0]
             approved = handler.handle(f"action approve {action_id} lead")
             self.assertIn("execution still requires", approved)
+            self.assertTrue(handler.owns("autotriage"))
+            self.assertIn("processed=0", handler.handle("autotriage"))
 
     def test_nested_terminal_delegates_and_exit_returns(self):
         shell = _Shell()

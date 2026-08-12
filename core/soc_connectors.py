@@ -54,7 +54,7 @@ class HTTPSJSONConnector:
             raise ValueError("connector response must contain JSON objects")
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise ValueError("connector records must be JSON objects")
-        result = self.store.ingest(rows, source)
+        result = self.store.ingest(rows, source, auto_triage=True)
         from .audit import record
         from .event_sink import event_bus
         safe_url = urllib.parse.urlunsplit(

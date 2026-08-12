@@ -123,12 +123,17 @@ detections                       Rule volume and false-positive health
 
 ```text
 ingest <file.json|jsonl> [source]
+autotriage [limit] [window-seconds]
 connectors
 connector pull <source> <https-url> [TOKEN_ENV]
 ```
 
 Imports normalize common SIEM, EDR, identity, DNS, firewall, proxy, email, and cloud
 fields into vendor-neutral observations while retaining the original JSON for audit.
+Terminal imports and HTTPS pulls automatically group new alerts into cases using
+structured asset, identity, IOC, and address fields. Grouping is time-bounded,
+idempotent, promotes priority when stronger evidence arrives, and never executes a
+response. `autotriage` processes any older unlinked alerts explicitly.
 
 The HTTPS connector is read-only and requires:
 
@@ -227,11 +232,17 @@ Corpus results include precision, recall, Brier score, and expected calibration 
 ```text
 cysoc > benchmark generate ".easyshark/synthetic-corpus"
 cysoc > benchmark corpus ".easyshark/synthetic-corpus/manifest.json"
+cysoc > benchmark corpus "PCAP_SAMPLES/generated/manifest.json"
 cysoc > oracle
 ```
 
-The generated two-case corpus verifies plumbing; it is not a production accuracy
-benchmark. Production validation requires the larger labelled corpus described in
+The generated seven-case suite contains a benign control plus deterministic beaconing,
+horizontal scanning, DNS tunnelling, exfiltration, direct prompt injection, and
+fragmented prompt injection captures. Its versioned manifest records SHA-256,
+generator version, seed, source, and license for every PCAP. The runner rejects empty
+or unsupported manifests, duplicate case IDs, path escapes, missing files, and hash
+mismatches. This verifies detector plumbing; it is not a production accuracy benchmark.
+Production validation still requires the independently labelled corpus described in
 `agentcontext/test.md`.
 
 ### Threat intelligence
@@ -432,7 +443,7 @@ The final approval line records authorization only. It does not isolate the endp
 Locally verified:
 
 - Python compilation.
-- 115 automated tests.
+- Automated unit and integration regression suite.
 - CYSOC entry and return behavior.
 - Alert, case, hunt, and approval workflows.
 - Synthetic corpus generation and scoring.
@@ -445,7 +456,7 @@ Still required before production readiness:
 - At least 500 independently labelled captures.
 - Held-out ECE below 0.10.
 - Demonstrated false-positive reduction without recall regression.
-- Prompt-injection red-team corpus.
+- Model-backed prompt-injection red-team runs over generated and external captures.
 - Production connector testing in vendor test tenants.
 - Sandbox escape, scale, recovery, and soak testing.
 - Connector-specific external-response safety testing.

@@ -60,7 +60,7 @@ class PacketMetadata:
     def from_packet(cls, pkt, index: int, fast_parsed: Optional[Dict[str, Any]] = None) -> "PacketMetadata":
         """Build a PacketMetadata from a scapy packet + optional fast_parse
         hints. Tolerant of malformed packets — every field is best-effort."""
-        from scapy.all import IP, IPv6, TCP, UDP, ICMP, ARP, Raw, Ether
+        from scapy.all import IP, IPv6, TCP, UDP, ICMP, ARP, Ether
         ts = float(getattr(pkt, "time", 0.0) or 0.0)
         total_len = len(pkt)
 
@@ -90,15 +90,15 @@ class PacketMetadata:
             tcp_ack = int(pkt[TCP].ack)
             flags_int = int(pkt[TCP].flags)
             tcp_flags = _tcp_flags_to_str(flags_int)
-            payload = bytes(pkt[TCP].payload) if Raw in pkt else b""
+            payload = bytes(pkt[TCP].payload)
         elif UDP in pkt:
             proto_name = "UDP"
             src_port = int(pkt[UDP].sport)
             dst_port = int(pkt[UDP].dport)
-            payload = bytes(pkt[UDP].payload) if Raw in pkt else b""
+            payload = bytes(pkt[UDP].payload)
         elif ICMP in pkt:
             proto_name = "ICMP"
-            payload = bytes(pkt[ICMP].payload) if Raw in pkt else b""
+            payload = bytes(pkt[ICMP].payload)
         elif ARP in pkt:
             proto_name = "ARP"
 

@@ -240,6 +240,10 @@ cysoc > campaign build CYSOC-20260812-AB12
 cysoc > response local CYSOC-20260812-AB12 watchlist bad.example 3600
 ```
 
+The generated PCAP corpus is deterministic and hash-pinned, with a benign control and
+labelled detector/safety cases. It is for regression testing and does not replace the
+independently labelled production-validation corpus.
+
 Approval records never execute external changes by themselves. Execution stays
 disabled until a separately authenticated response connector is configured.
 Autonomous `soc-analyst` reports are automatically registered as durable cases,

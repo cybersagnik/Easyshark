@@ -298,16 +298,6 @@ horizontal/vertical port scan, protocol-port mismatch, lateral movement, long
 connections, domain reputation signals, TLS fingerprint anomalies, and
 prompt-injection payload detection. All deterministic, no LLM required.
 
-**TLS fingerprinting.** JA3/JA4-style ClientHello metadata analysis.
-
-**Packet anonymizer.** `core.anonymizer.Anonymizer` creates safe packet
-metadata for external model calls without modifying the original capture.
-
-**Prompt-injection defense.** Packet/tool content is wrapped in untrusted
-observation envelopes. Instruction-like payloads are detected as security
-findings and blocked from the response path. Red-team fixtures validate 10/10
-malicious payload detection with 0/3 false positives.
-
 **Session persistence + memory.** Sessions saved automatically, resumable via
 `--session <key>` or `--session latest`. Action log via `events` command.
 LLM tool-call memory via `memory` command.
@@ -318,6 +308,16 @@ LLM tool-call memory via `memory` command.
 
 These features are functional and tested but are considered additive to the
 core workflow. They may see API changes as development continues.
+
+**TLS fingerprinting.** JA3/JA4-style ClientHello metadata analysis.
+
+**Packet anonymizer.** `core.anonymizer.Anonymizer` creates safe packet
+metadata for external model calls without modifying the original capture.
+
+**Prompt-injection defense.** Packet/tool content is wrapped in untrusted
+observation envelopes. Instruction-like payloads are detected as security
+findings and blocked from the response path. Red-team fixtures validate 10/10
+malicious payload detection with 0/3 false positives.
 
 #### Incident Reports
 

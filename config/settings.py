@@ -1,7 +1,7 @@
 """
 Application settings and configuration.
 
-Architecture (from EasyShark master brief §1):
+Architecture:
 
   FROZEN sections (read-only, never modify without brief update):
     - Detection thresholds (DETECTION_RULES)
@@ -10,7 +10,10 @@ Architecture (from EasyShark master brief §1):
 
   ACTIVE sections (the LLM layer — primary work zone):
     
-    - GROQ_* constants (optional cloud fallback)
+    - ZEN_* constants (primary transport)
+    - OPENROUTER_* constants (secondary fallback)
+    - GROQ_* constants (last-resort fallback)
+    - SYSTEM_PROMPTS / SYSTEM_TEMPERATURE
     - Tool-calling knobs
 """
 import os
@@ -46,10 +49,9 @@ def _load_dotenv(path: Path) -> None:
 _load_dotenv(BASE_DIR / ".env")
 
 # ---------------------------------------------------------------------------
-# Groq cloud — optional. Disabled by default in this build.
+# Groq cloud — last-resort fallback.
 # ---------------------------------------------------------------------------
-# Keep the API key plumbing so the existing .env / CI configs still work,
-# but the LLM client does NOT use Groq unless GROQ_ENABLED=1 is exported.
+# Enabled by default in .env.example; disabled if GROQ_ENABLED=0 or key is unset.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL = "https://api.groq.com"
 GROQ_ENABLED  = os.environ.get("GROQ_ENABLED", "0") == "1"
@@ -262,11 +264,11 @@ SYSTEM_PROMPTS = {
 GROQ_SYSTEM_PROMPTS = SYSTEM_PROMPTS
 
 # ---------------------------------------------------------------------------
-# OpenCode Zen cloud — PRIMARY transport (replaces OpenRouter, 2026-08-03).
+# OpenCode Zen cloud — PRIMARY transport.
 # ---------------------------------------------------------------------------
 # Zen is the OpenAI-compatible endpoint at opencode.ai/zen/v1. The agentic
-# DAG (planner->executor->critic) needs tool calling; all Zen free models
-# support it. Groq remains as last-resort fallback.
+# DAG (planner->executor->critic) needs tool calling. Groq is the last-resort
+# fallback, OpenRouter is the secondary fallback.
 # NOTE: requests MUST send a browser-like User-Agent header or Cloudflare
 # returns 403 (error code 1010) — handled inside llm_client._zen_* methods.
 ZEN_ENABLED = os.environ.get("ZEN_ENABLED", "0") != "0"
@@ -276,17 +278,17 @@ ZEN_BASE_URL = os.environ.get("ZEN_BASE_URL",
 ZEN_TIMEOUT   = int(os.environ.get("ZEN_TIMEOUT", "120"))
 ZEN_MAX_TOKENS = int(os.environ.get("ZEN_MAX_TOKENS", "2048"))
 
-# Role -> Zen free model identifier. All free-tier, no API cost.
-# Override per role via env (e.g. ZEN_EXPLAINER_MODEL=deepseek-v4-flash-free).
+# Role -> Zen model identifier. Set via env (e.g. ZEN_EXPLAINER_MODEL).
+# Defaults match .env.example — cost-optimised paid models.
 ZEN_MODELS = {
     "planner":   os.environ.get("ZEN_PLANNER_MODEL",
-                                "ling-3.0-flash-free"),
+                                "gpt-5-nano"),
     "explainer": os.environ.get("ZEN_EXPLAINER_MODEL",
-                                "deepseek-v4-flash-free"),
+                                "deepseek-v4-flash"),
     "coder":     os.environ.get("ZEN_CODER_MODEL",
-                                "north-mini-code-free"),
+                                "gpt-5.4-nano"),
     "critic":    os.environ.get("ZEN_CRITIC_MODEL",
-                                "deepseek-v4-flash-free"),
+                                "gpt-5-nano"),
 }
 
 # Session rate-limiter guard (mirrors the Phase 9 §9.5 pattern). Counters
@@ -298,9 +300,9 @@ ZEN_MINUTE_SOFT_CAP = int(os.environ.get("ZEN_MINUTE_SOFT_CAP", "30"))
 ZEN_MINUTE_SLEEP_SEC = float(os.environ.get("ZEN_MINUTE_SLEEP_SEC", "2"))
 
 # ---------------------------------------------------------------------------
-# OpenRouter cloud — legacy transport (retained for rollback/tests).
-# Disabled by default now that Zen is primary; re-enable with
-# OPENROUTER_ENABLED=1 to use it again.
+# OpenRouter cloud — secondary fallback.
+# Enabled by default in .env.example; disabled if OPENROUTER_ENABLED=0
+# or key is unset. Used when Zen is rate-limited.
 # ---------------------------------------------------------------------------
 OPENROUTER_ENABLED = os.environ.get("OPENROUTER_ENABLED", "0") != "0"
 OPENROUTER_API_KEY  = os.environ.get("OPENROUTER_API_KEY", "")

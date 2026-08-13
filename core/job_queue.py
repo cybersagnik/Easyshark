@@ -1,6 +1,7 @@
 """Durable SQLite queue for autonomous PCAP missions."""
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 import time
@@ -25,11 +26,31 @@ class JobQueue:
                 status TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 error TEXT,
+                session_key TEXT,
+                checkpoint_stage TEXT,
+                checkpoint_updated REAL,
+                report_path TEXT,
+                last_event_sequence INTEGER NOT NULL DEFAULT 0,
+                idempotency_key TEXT,
                 created REAL NOT NULL,
                 updated REAL NOT NULL,
                 UNIQUE(path, fingerprint, mission)
             )""")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+            migrations = {
+                "session_key": "TEXT",
+                "checkpoint_stage": "TEXT",
+                "checkpoint_updated": "REAL",
+                "report_path": "TEXT",
+                "last_event_sequence": "INTEGER NOT NULL DEFAULT 0",
+                "idempotency_key": "TEXT",
+            }
+            for name, declaration in migrations.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {declaration}")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency "
+                         "ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL")
             conn.execute("UPDATE jobs SET status='queued', updated=? "
                          "WHERE status='running' AND updated < ?",
                          (time.time(), time.time() - max(1.0, lease_seconds)))
@@ -46,13 +67,16 @@ class JobQueue:
 
     def enqueue(self, path: str, fingerprint: str, mission: str) -> int:
         now = time.time()
+        idempotency_key = hashlib.sha256(
+            f"{fingerprint}\0{mission}".encode("utf-8")).hexdigest()
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT OR IGNORE INTO jobs(path,fingerprint,mission,status,created,updated) "
-                "VALUES(?,?,?,?,?,?)", (path, fingerprint, mission, "queued", now, now))
+                "INSERT OR IGNORE INTO jobs(path,fingerprint,mission,status,"
+                "idempotency_key,created,updated) VALUES(?,?,?,?,?,?,?)",
+                (path, fingerprint, mission, "queued", idempotency_key, now, now))
             row = conn.execute(
-                "SELECT id FROM jobs WHERE path=? AND fingerprint=? AND mission=?",
-                (path, fingerprint, mission)).fetchone()
+                "SELECT id FROM jobs WHERE idempotency_key=?",
+                (idempotency_key,)).fetchone()
             return int(row["id"] if row else cur.lastrowid)
 
     def claim(self) -> Optional[Dict[str, Any]]:
@@ -69,10 +93,26 @@ class JobQueue:
             out["status"] = "running"
             return out
 
-    def complete(self, job_id: int) -> None:
+    def bind_session(self, job_id: int, session_key: str) -> None:
         with self._connect() as conn:
-            conn.execute("UPDATE jobs SET status='done', updated=? WHERE id=?",
-                         (time.time(), job_id))
+            conn.execute("UPDATE jobs SET session_key=?, updated=? WHERE id=?",
+                         (str(session_key)[:100], time.time(), job_id))
+
+    def checkpoint(self, job_id: int, state: Dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET checkpoint_stage=?, checkpoint_updated=?, "
+                "report_path=?, last_event_sequence=?, updated=? WHERE id=?",
+                (str(state.get("stage", ""))[:100], time.time(),
+                 str(state.get("report_path") or "")[:2000] or None,
+                 int(state.get("last_event_sequence", 0)), time.time(), job_id))
+
+    def complete(self, job_id: int, report_path: Optional[str] = None) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET status='done', report_path=COALESCE(?, report_path), "
+                "checkpoint_stage='complete', updated=? WHERE id=?",
+                (report_path, time.time(), job_id))
 
     def fail(self, job_id: int, error: str, retry: bool = True) -> None:
         with self._connect() as conn:

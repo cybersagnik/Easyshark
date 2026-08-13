@@ -295,12 +295,19 @@ class CYSOCCommandHandler:
                 f"{result['alerts']} new alerts from {args[1]}.")
 
     def _benchmark(self, args) -> str:
-        if len(args) != 2 or args[0].lower() not in ("corpus", "generate"):
-            return "Usage: benchmark corpus <manifest.json> | benchmark generate <directory>"
+        if len(args) != 2 or args[0].lower() not in ("corpus", "generate", "gate"):
+            return ("Usage: benchmark corpus <manifest.json> | "
+                    "benchmark generate <directory> | benchmark gate <manifest.json>")
         if args[0].lower() == "generate":
             from ai.oracle import generate_synthetic_corpus
             result = generate_synthetic_corpus(args[1])
             return f"Generated {result['cases']} labelled synthetic cases. Manifest: {result['manifest']}"
+        if args[0].lower() == "gate":
+            from core.production_gate import run
+            result = run(args[1])
+            failed = [row["name"] for row in result["gates"] if not row["passed"]]
+            return (f"PRODUCTION GATE ready={str(result['ready']).lower()} "
+                    f"failed={','.join(failed) if failed else 'none'}")
         from ai.oracle import run_corpus
         result = run_corpus(args[1])
         detector_errors = sum(

@@ -238,6 +238,9 @@ class InteractiveShell:
         self.dissector_skips = self.dissection.get("skipped", 0)
         from ai import tool_cache
         tool_cache.clear()
+        self.__dict__.pop("_investigation_analysis_cache", None)
+        if getattr(self, "session", None) is not None:
+            self.session.analysis_cache = {}
         sys.stdout.write(DIM + f"Reloaded: {len(self.index.packets)} packets, "
                               f"{len(self.flow_engine.flows)} flows.\n" + RESET)
         sys.stdout.flush()
@@ -613,6 +616,16 @@ class InteractiveShell:
             ("Turns", str(len(s.conversation) // 2)),
             ("Triage cache", "yes" if s.triage_cache else "no"),
         ]
+        checkpoint = s.investigation_state or {}
+        if checkpoint.get("schema") == "easyshark.investigation.compaction.v1":
+            plan = checkpoint.get("plan", [])
+            complete = sum(row.get("status") == "complete" for row in plan)
+            info_rows.extend([
+                ("Investigation", str(checkpoint.get("status", "unknown"))),
+                ("Checkpoint stage", str(checkpoint.get("stage", "unknown"))),
+                ("Hypotheses", f"{complete}/{len(plan)} complete"),
+                ("Checkpoint seq", str(checkpoint.get("last_event_sequence", 0))),
+            ])
         print(section("Session " + s.key))
         label_w = max(len(a) for a, _ in info_rows)
         for label, val in info_rows:

@@ -132,7 +132,9 @@ def _persist_verdict(hyp: "DAGHypothesis", ctx) -> None:
 
 EXECUTOR_SYSTEM_PROMPT = """You are verifying a specific hypothesis about network traffic in a packet
 capture. Call the available forensic tools to gather real evidence. Be
-systematic. After gathering evidence, return a single JSON object:
+systematic. Request independent tool calls together in one assistant turn so
+they execute concurrently; keep dependent calls ordered. After gathering
+evidence, return a single JSON object:
 
 {
   "verdict": "confirmed" | "weakened" | "ruled_out",
@@ -265,6 +267,7 @@ class DagRunner:
             plan_items: List[Dict[str, Any]],
             ctx,
             on_event: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+            resume_state: Optional[Dict[str, Any]] = None,
             ) -> DAGResult:
         """Execute the plan against a ToolContext.
 
@@ -275,11 +278,15 @@ class DagRunner:
         """
         t_start = time.monotonic()
         hypotheses = [self._to_hypothesis(item) for item in plan_items]
+        resumed_ids = self._restore_checkpoint(hypotheses, resume_state)
         waves = _execution_waves(hypotheses)
 
         # Phase 10 §10.2 — recall prior-session knowledge once, before any
         # tool loop runs. The notes are injected into each executor prompt.
         prior_notes = _recall_prior_iocs(ctx)
+        if resume_state:
+            from core.investigation_checkpoint import compact_context
+            prior_notes.append(compact_context(resume_state))
         if on_event and prior_notes:
             on_event("prior_knowledge", {"notes": prior_notes})
 
@@ -298,6 +305,14 @@ class DagRunner:
         critic_calls = 0
         for wave in waves:
             for hyp in wave:
+                if hyp.id in resumed_ids:
+                    if on_event:
+                        on_event("hypothesis_resumed", {
+                            "id": hyp.id, "name": hyp.hypothesis,
+                            "verdict": hyp.verdict,
+                            "confidence": hyp.confidence,
+                        })
+                    continue
                 if on_event:
                     on_event("hypothesis_start", {
                         "id": hyp.id, "name": hyp.hypothesis,
@@ -322,6 +337,11 @@ class DagRunner:
                             feedback = ("Your previous response was not a valid "
                                         "JSON verdict object. Output ONLY the "
                                         "JSON object.")
+                            if on_event:
+                                on_event("hypothesis_retry", {
+                                    "id": hyp.id, "reason": "invalid_verdict",
+                                    "retries": attempt + 1,
+                                })
                             continue
                         break
                     if feedback is not None:
@@ -363,6 +383,12 @@ class DagRunner:
                     feedback = (issues + ("\n" + corrected if corrected else "")).strip()
                     if not feedback:
                         break  # nothing actionable from the critic
+                    if on_event:
+                        on_event("hypothesis_retry", {
+                            "id": hyp.id, "reason": "critic_rejected",
+                            "issues": hyp.critic_issues,
+                            "retries": attempt + 1,
+                        })
 
                 self._finalize(hyp, verdict)
 
@@ -421,6 +447,7 @@ class DagRunner:
                         "confidence": hyp.confidence,
                         "evidence": hyp.evidence,
                         "reasoning": hyp.reasoning,
+                        "tools": hyp.tools_used,
                         "critic_approved": hyp.critic_approved,
                         "critic_issues": hyp.critic_issues,
                         "retries": hyp.retries,
@@ -510,6 +537,35 @@ class DagRunner:
             return
         hyp.verdict = verdict["verdict"]
         hyp.confidence = verdict["confidence"]
+
+    @staticmethod
+    def _restore_checkpoint(hypotheses: List[DAGHypothesis],
+                            state: Optional[Dict[str, Any]]) -> set:
+        """Restore only hypotheses durably marked complete."""
+        rows = {row.get("id"): row for row in (state or {}).get("plan", [])
+                if isinstance(row, dict) and row.get("status") == "complete"}
+        resumed = set()
+        for hypothesis in hypotheses:
+            row = rows.get(hypothesis.id)
+            if row is None:
+                continue
+            verdict = str(row.get("verdict", ""))
+            if verdict not in ("confirmed", "weakened", "ruled_out", "inconclusive"):
+                continue
+            hypothesis.verdict = verdict
+            hypothesis.confidence = max(0.0, min(1.0, float(
+                row.get("confidence", 0.0))))
+            hypothesis.evidence = [str(value)[:500]
+                                   for value in row.get("evidence", [])][:5]
+            hypothesis.reasoning = str(row.get("reasoning", ""))[:500]
+            hypothesis.tools_used = [str(value)[:80]
+                                     for value in row.get("tools_used", [])][:20]
+            hypothesis.critic_approved = row.get("critic_approved")
+            hypothesis.critic_issues = [str(value)[:200]
+                                        for value in row.get("critic_issues", [])][:8]
+            hypothesis.retries = int(row.get("retries", 0))
+            resumed.add(hypothesis.id)
+        return resumed
 
     @staticmethod
     def _to_hypothesis(item: Dict[str, Any]) -> DAGHypothesis:

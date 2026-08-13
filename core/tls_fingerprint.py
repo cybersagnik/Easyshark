@@ -58,7 +58,8 @@ def fingerprint_packet(packet) -> Optional[dict[str, Any]]:
                           "-".join(map(str, extensions)),
                           "-".join(map(str, groups)),
                           "-".join(map(str, formats))))
-    digest = hashlib.md5(ja3_text.encode()).hexdigest()
+    # JA3 mandates MD5 as its wire identifier; it is not used for security.
+    digest = hashlib.md5(ja3_text.encode(), usedforsecurity=False).hexdigest()
     # JA4's stable prefix and truncated component hash are useful even when
     # packet captures omit one optional TLS extension.
     tls_version = {0x0301: "10", 0x0302: "11", 0x0303: "12", 0x0304: "13"}.get(version, "00")

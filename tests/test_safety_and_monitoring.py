@@ -24,6 +24,70 @@ from cli.commands import CommandHandler
 
 
 class TestSafetyAndMonitoring(unittest.TestCase):
+    def test_investigation_reuses_deterministic_capture_analysis(self):
+        packet = SimpleNamespace()
+        shell = SimpleNamespace(
+            pcap_file="missing-test-capture.pcap",
+            index=SimpleNamespace(packets=[packet]),
+            flow_engine=SimpleNamespace(get_all_flows=lambda: []),
+            rules=[],
+            get_packets=lambda: [packet],
+        )
+        anomaly = SimpleNamespace(type="beaconing")
+        with patch("core.detectors.run_all", return_value=[anomaly]) as detect, \
+                patch("core.narrative.build", return_value="cached narrative") as build:
+            first = InvestigateCommandHandler(shell)._capture_analysis()
+            second = InvestigateCommandHandler(shell)._capture_analysis()
+            shell.index.packets.append(SimpleNamespace())
+            InvestigateCommandHandler(shell)._capture_analysis()
+        self.assertIs(first[3], second[3])
+        self.assertEqual(second[4], "cached narrative")
+        self.assertEqual(detect.call_count, 2,
+                         "packet-count changes must invalidate the cache")
+        self.assertEqual(build.call_count, 2)
+
+    def test_manual_decline_skips_expensive_hypothesis_verification(self):
+        class FakeLLM:
+            calls = 0
+
+            def is_available(self):
+                return True
+
+            def query_with_tools(self, *args, **kwargs):
+                self.calls += 1
+                return '{}'
+
+        shell = SimpleNamespace(
+            llm_client=FakeLLM(),
+            get_packets=lambda: [],
+            flow_engine=SimpleNamespace(get_all_flows=lambda: []),
+            rules=[],
+            stats_engine=None,
+            pcap_file="missing-test-capture.pcap",
+            triage={},
+            dissection={},
+        )
+
+        def decline(event, payload):
+            if event == "hypothesis_start":
+                payload["_skip_this"] = True
+
+        hypothesis_json = json.dumps([{
+            "name": "Test hypothesis",
+            "description": "Needs verification",
+            "confidence": "medium",
+        }])
+        conclusion_json = json.dumps({"analyst_summary": "declined"})
+        with patch("core.detectors.run_all", return_value=[]), \
+                patch("core.narrative.build", return_value="summary"), \
+                patch("ai.investigator._single_completion",
+                      side_effect=[hypothesis_json, conclusion_json]):
+            from ai.investigator import investigate
+            report = investigate(shell, on_event=decline)
+        self.assertEqual(shell.llm_client.calls, 0)
+        self.assertEqual(report.hypotheses[0].verdict, "ruled_out")
+        self.assertIn("declined", report.hypotheses[0].reasoning)
+
     def test_policy_requires_approval_for_external_action(self):
         self.assertFalse(authorize(ActionTier.EXTERNAL_NOTIFY))
         self.assertTrue(authorize(ActionTier.EXTERNAL_NOTIFY, approved=True))

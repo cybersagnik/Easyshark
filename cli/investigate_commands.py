@@ -21,7 +21,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from main import RESET, BOLD, DIM, CYAN, BRIGHT_CYAN, BRIGHT_GREEN, YELLOW, WHITE, _box, UNICODE_GLYPHS
 from .formatter import OutputFormatter
@@ -55,14 +55,173 @@ def _live(text: str = "") -> None:
 class InvestigateCommandHandler:
     """Mirrors cli.commands.CommandHandler interface."""
 
-    def __init__(self, shell, threat_intel=None, mode: str = "standard"):
+    def __init__(self, shell, threat_intel=None, mode: str = "standard",
+                 checkpoint_callback: Optional[Callable[[Dict[str, Any]], None]] = None):
         self.shell = shell
         self.fmt = OutputFormatter()
         self.threat_intel = threat_intel
         self.mode = mode
+        self.checkpoint_callback = checkpoint_callback
+        self._checkpoint_state: Optional[Dict[str, Any]] = None
+
+    def _store_checkpoint(self) -> None:
+        state = self._checkpoint_state
+        if state is None:
+            return
+        from core.investigation_checkpoint import provider_state
+        state["provider_state"] = provider_state(getattr(self.shell, "llm_client", None))
+        session = getattr(self.shell, "session", None)
+        manager = getattr(self.shell, "session_manager", None)
+        if session is not None and manager is not None:
+            session.investigation_state = state
+            manager.save(session)
+        if self.checkpoint_callback is not None:
+            self.checkpoint_callback(dict(state))
+
+    def _prepare_checkpoint(self, mission: str) -> Optional[Dict[str, Any]]:
+        from core.investigation_checkpoint import begin, validate
+        session = getattr(self.shell, "session", None)
+        existing = dict(getattr(session, "investigation_state", {}) or {})
+        valid, reason = validate(existing, mission, self.shell.pcap_file)
+        if valid and existing.get("status") in ("running", "failed") \
+                and existing.get("plan"):
+            existing["status"] = "running"
+            existing.pop("error", None)
+            saved_provider = existing.get("provider_state") or {}
+            llm = getattr(self.shell, "llm_client", None)
+            if llm is not None:
+                if callable(getattr(llm, "restore_role_call_counts", None)):
+                    llm.restore_role_call_counts(saved_provider.get("call_counts"))
+                if callable(getattr(llm, "restore_exhausted", None)):
+                    llm.restore_exhausted(saved_provider.get("exhausted"))
+                llm.fallback_count = int(saved_provider.get("fallbacks", 0))
+                llm._provider_attempts = int(saved_provider.get("attempts", 0))
+            self._checkpoint_state = existing
+            self._store_checkpoint()
+            event_bus.publish("investigation_resumed", {
+                "session": getattr(session, "key", None),
+                "stage": existing.get("stage"),
+                "completed": sum(row.get("status") == "complete"
+                                 for row in existing.get("plan", [])),
+            })
+            return existing
+        if existing and existing.get("schema") and reason != "checkpoint schema mismatch":
+            logger.warning("ignoring stale investigation checkpoint: %s", reason)
+        self._checkpoint_state = begin(
+            mission, self.shell.pcap_file,
+            mission_id=existing.get("mission_id") or getattr(session, "key", None),
+            preserved=existing,
+        )
+        self._store_checkpoint()
+        return None
+
+    def _checkpoint_plan(self, plan_items: List[Dict[str, Any]]) -> None:
+        if self._checkpoint_state is None:
+            return
+        from core.investigation_checkpoint import set_plan
+        set_plan(self._checkpoint_state, plan_items)
+        self._store_checkpoint()
+
+    def _checkpoint_event(self, event: str, payload: Dict[str, Any]) -> None:
+        if self._checkpoint_state is None:
+            return
+        from core.investigation_checkpoint import apply_event
+        apply_event(self._checkpoint_state, event, payload)
+        if event in ("hypothesis_verdict", "hypothesis_backtrack",
+                     "hypothesis_retry", "provider_attempt",
+                     "provider_fallback", "dag_done"):
+            self._store_checkpoint()
+
+    def _checkpoint_complete(self, path: str, report: InvestigationReport) -> None:
+        if self._checkpoint_state is None:
+            return
+        from core.investigation_checkpoint import complete
+        complete(self._checkpoint_state, path, report.conclusion)
+        self._store_checkpoint()
+
+    def _checkpoint_failed(self, exc: Exception) -> None:
+        if self._checkpoint_state is None:
+            return
+        from core.investigation_checkpoint import fail
+        fail(self._checkpoint_state, exc)
+        self._store_checkpoint()
+
+    def _capture_analysis(self):
+        """Reuse deterministic detector/narrative work across process restarts."""
+        flows = self.shell.flow_engine.get_all_flows()
+        alerts = [alert for rule in self.shell.rules for alert in rule.get_alerts()]
+        path = Path(getattr(self.shell, "pcap_file", ""))
+        try:
+            stat = path.stat()
+            file_identity = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            file_identity = (str(path), None, None)
+        packet_count = len(getattr(getattr(self.shell, "index", None),
+                                   "packets", ()) or ())
+        alert_identity = tuple(
+            (getattr(alert, "rule_name", None), getattr(alert, "message", None))
+            for alert in alerts)
+        key = (file_identity, packet_count, len(flows), alert_identity)
+        cached = getattr(self.shell, "_investigation_analysis_cache", None)
+        if cached and cached.get("key") == key:
+            return (cached["packets"], flows, alerts,
+                    cached["anomalies"], cached["narrative"])
+
+        packets = self.shell.get_packets()
+        from core.detectors import Anomaly, run_all
+        from core.narrative import build
+        from core.investigation_checkpoint import DETECTOR_VERSION, capture_sha256
+        try:
+            content_hash = capture_sha256(str(path))
+        except OSError:
+            # Synthetic/unit-test shells may provide packet objects without a
+            # backing file. They still get the safe in-process cache.
+            content_hash = None
+        durable = dict(getattr(getattr(self.shell, "session", None),
+                               "analysis_cache", {}) or {})
+        durable_alerts = [list(item) for item in alert_identity]
+        if (content_hash is not None
+                and durable.get("schema") == "easyshark.analysis-cache.v1"
+                and durable.get("pcap_sha256") == content_hash
+                and durable.get("detector_version") == DETECTOR_VERSION
+                and durable.get("alerts") == durable_alerts):
+            try:
+                anomalies = [Anomaly(**item)
+                             for item in durable.get("anomalies", [])]
+                narrative = str(durable["narrative"])
+            except (KeyError, TypeError, ValueError):
+                anomalies, narrative = run_all(packets, flows), ""
+            if narrative:
+                self.shell._investigation_analysis_cache = {
+                    "key": key, "packets": packets, "anomalies": anomalies,
+                    "narrative": narrative,
+                }
+                return packets, flows, alerts, anomalies, narrative
+
+        anomalies = run_all(packets, flows)
+        narrative = build(packets, flows, alerts, anomalies)
+        self.shell._investigation_analysis_cache = {
+            "key": key,
+            "packets": packets,
+            "anomalies": anomalies,
+            "narrative": narrative,
+        }
+        session = getattr(self.shell, "session", None)
+        manager = getattr(self.shell, "session_manager", None)
+        if content_hash is not None and session is not None and manager is not None:
+            session.analysis_cache = {
+                "schema": "easyshark.analysis-cache.v1",
+                "pcap_sha256": content_hash,
+                "detector_version": DETECTOR_VERSION,
+                "alerts": durable_alerts,
+                "anomalies": [vars(item) for item in anomalies],
+                "narrative": narrative,
+            }
+            manager.save(session)
+        return packets, flows, alerts, anomalies, narrative
 
     def _apply_soc_assessment(self, report: InvestigationReport,
-                              evidence_graph) -> None:
+                              evidence_graph, anomalies=None) -> None:
         if self.mode != "soc-analyst":
             return
         alerts = []
@@ -72,10 +231,10 @@ class InvestigateCommandHandler:
         assessment = AutonomousSOCAnalyst().assess(
             report, alerts=alerts, evidence_graph=evidence_graph)
         try:
-            from core.detectors import run_all
             from ai.oracle import cross_path_score
-            deterministic = {item.type for item in run_all(
-                self.shell.get_packets(), self.shell.flow_engine.get_all_flows())}
+            if anomalies is None:
+                _, _, _, anomalies, _ = self._capture_analysis()
+            deterministic = {item.type for item in anomalies}
             hypothesis_text = " ".join(
                 f"{h.name} {h.description} {' '.join(h.evidence_found)}".lower()
                 for h in report.hypotheses if h.verdict in ("confirmed", "weakened"))
@@ -175,6 +334,9 @@ class InvestigateCommandHandler:
         if hasattr(self.shell.llm_client, "set_status_callback"):
             self.shell.llm_client.set_status_callback(status)
 
+        resume_state = self._prepare_checkpoint(question) if auto and not linear else None
+        if auto and hasattr(self.shell.llm_client, "set_lifecycle_callback"):
+            self.shell.llm_client.set_lifecycle_callback(self._checkpoint_event)
         if linear:
             try:
                 return self._run_linear(auto=auto, header_line=(
@@ -182,8 +344,14 @@ class InvestigateCommandHandler:
             finally:
                 status_finish("investigation complete")
         try:
-            return self._run_dag(auto=auto, question=question)
+            return self._run_dag(auto=auto, question=question,
+                                 resume_state=resume_state)
+        except Exception as exc:
+            self._checkpoint_failed(exc)
+            raise
         finally:
+            if auto and hasattr(self.shell.llm_client, "set_lifecycle_callback"):
+                self.shell.llm_client.set_lifecycle_callback(None)
             status_finish("investigation complete")
 
     # ------------------------------------------------------------------ #
@@ -370,7 +538,8 @@ class InvestigateCommandHandler:
     # DAG path — Phase 9 §9.4                                             #
     # planner -> dag_runner (executor + critic) -> synthesis -> annotate  #
     # ------------------------------------------------------------------ #
-    def _run_dag(self, auto: bool, question: str) -> Optional[str]:
+    def _run_dag(self, auto: bool, question: str,
+                 resume_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
         from ai.planner import HypothesisPlanner
         from ai.dag_runner import DagRunner
         from ai.tool_registry import ToolContext
@@ -381,17 +550,9 @@ class InvestigateCommandHandler:
         _live("")
 
         llm = self.shell.llm_client
-        packets = self.shell.get_packets()
-        flows = self.shell.flow_engine.get_all_flows()
-        alerts: List[Any] = []
-        for r in self.shell.rules:
-            alerts.extend(r.get_alerts())
+        packets, flows, alerts, anomalies, narrative = self._capture_analysis()
         from ai.evidence_graph import from_capture
         evidence_graph = from_capture(packets, flows, alerts)
-        from core.detectors import run_all
-        from core.narrative import build
-        anomalies = run_all(packets, flows)
-        narrative = build(packets, flows, alerts, anomalies)
 
         _live(f"  narrative built ({len(narrative)} chars, "
               f"{len(anomalies)} anomalies)")
@@ -402,22 +563,27 @@ class InvestigateCommandHandler:
         # -------------------------------------------------------------- #
         planner_calls = 0
         planner = HypothesisPlanner(llm)
+        from core.investigation_checkpoint import plan_items as resume_plan_items
+        plan_items = resume_plan_items(resume_state or {})
         try:
             # Phase 11 §11.1 — suggest tools learned from prior
             # critic-approved investigations (best-effort, never blocks).
-            learned_hint = None
-            try:
-                from ai.pattern_learner import suggest_tools
-                learned_hint = suggest_tools(question)
-            except Exception as exc:
-                logger.debug("pattern_learner.suggest_tools failed: %s", exc)
-            plan_items = planner.plan(
-                question=question, triage=self.shell.triage,
-                alerts=alerts, anomalies=anomalies, narrative=narrative,
-                tools_hint=learned_hint,
-            )
-            planner_calls = 1 if (llm is not None
-                                  and llm.is_available()) else 0
+            if plan_items:
+                _live("  validated checkpoint loaded — resuming pending hypotheses")
+            else:
+                learned_hint = None
+                try:
+                    from ai.pattern_learner import suggest_tools
+                    learned_hint = suggest_tools(question)
+                except Exception as exc:
+                    logger.debug("pattern_learner.suggest_tools failed: %s", exc)
+                plan_items = planner.plan(
+                    question=question, triage=self.shell.triage,
+                    alerts=alerts, anomalies=anomalies, narrative=narrative,
+                    tools_hint=learned_hint,
+                )
+                planner_calls = 1 if (llm is not None
+                                      and llm.is_available()) else 0
         except Exception as exc:
             logger.warning("Planner failed: %s", exc)
             plan_items = None
@@ -426,6 +592,7 @@ class InvestigateCommandHandler:
                   "falling back to linear investigation")
             return self._run_linear(auto=auto, header_line=(
                 "INVESTIGATION  (linear fallback — planner failed)"))
+        self._checkpoint_plan(plan_items)
 
         _live(f"Planning investigation... [{len(plan_items)} hypotheses]")
         for item in plan_items:
@@ -446,6 +613,7 @@ class InvestigateCommandHandler:
         runner = DagRunner(llm_client=llm)
 
         def emit(event: str, payload: Dict[str, Any]):
+            self._checkpoint_event(event, payload)
             event_bus.publish(event, {
                 "session": getattr(getattr(self.shell, "session", None), "key", None),
                 **payload,
@@ -481,7 +649,8 @@ class InvestigateCommandHandler:
                       f"(conf={payload['confidence']:.2f}) "
                       f"— retrying with narrowed evidence..." + RESET)
 
-        dag = runner.run(plan_items, ctx, on_event=emit)
+        dag = runner.run(plan_items, ctx, on_event=emit,
+                         resume_state=resume_state)
         from ai.evidence_graph import references_from_evidence
         for hypothesis in dag.hypotheses:
             refs = references_from_evidence(hypothesis.evidence)
@@ -546,6 +715,9 @@ class InvestigateCommandHandler:
             synthesis_calls = 1
             conclusion = _extract_json_obj(raw) or {}
 
+        logical_calls = planner_calls + dag.llm_calls + synthesis_calls
+        provider_turns = int((self._checkpoint_state or {}).get(
+            "budgets", {}).get("provider_turns_used", 0))
         report = InvestigationReport(
             narrative=narrative,
             hypotheses=[
@@ -564,12 +736,15 @@ class InvestigateCommandHandler:
             ],
             conclusion=conclusion,
             elapsed_sec=dag.elapsed_sec,
-            llm_calls=planner_calls + dag.llm_calls + synthesis_calls,
+            # Use transport attempts when checkpointing is active so failed
+            # fallbacks and multi-turn tool calls are not hidden. Preserve
+            # the historical logical count for manual/non-checkpoint runs.
+            llm_calls=provider_turns or logical_calls,
         )
         if not report.conclusion:
             report.conclusion = _fallback_conclusion(report)
         self._enrich_report(report)
-        self._apply_soc_assessment(report, evidence_graph)
+        self._apply_soc_assessment(report, evidence_graph, anomalies=anomalies)
 
         _live("─" * 67)
         _live("INVESTIGATION COMPLETE")
@@ -581,8 +756,8 @@ class InvestigateCommandHandler:
             _live(f"  [{verdict:<11}]  {h.name:<40}  confidence: {conf}")
         _live("")
         _live(f"  elapsed: {dag.elapsed_sec:.1f}s, "
-              f"LLM calls: {report.llm_calls} "
-              f"(planner {planner_calls} + exec {dag.executor_calls} "
+              f"provider turns: {report.llm_calls} "
+              f"(logical operations: planner {planner_calls} + exec {dag.executor_calls} "
               f"+ critic {dag.critic_calls} + synthesis {synthesis_calls})")
 
         # ---- Final report (reuse auto_analyst schema + renderer) ----- #
@@ -614,10 +789,12 @@ class InvestigateCommandHandler:
             try:
                 path = _save_report(report, self.shell.pcap_file,
                                     evidence_graph=evidence_graph)
+                self._checkpoint_complete(path, report)
                 _live(f"Report saved to {path}")
             except Exception as exc:
                 logger.warning("autonomous report save failed: %s", exc)
                 _live(f"Report save failed: {exc}")
+                raise
 
         return None
 

@@ -281,8 +281,11 @@ ZEN_MAX_TOKENS = int(os.environ.get("ZEN_MAX_TOKENS", "2048"))
 # Role -> Zen model identifier. Set via env (e.g. ZEN_EXPLAINER_MODEL).
 # Defaults match .env.example — cost-optimised paid models.
 ZEN_MODELS = {
+    # planner uses deepseek-v4-flash (was gpt-5-nano) — the hypothesis-plan
+    # DAG needs complete parseable JSON; gpt-5-nano truncated it and forced
+    # the linear fallback. deepseek-v4-flash returns complete plans.
     "planner":   os.environ.get("ZEN_PLANNER_MODEL",
-                                "gpt-5-nano"),
+                                "deepseek-v4-flash"),
     "explainer": os.environ.get("ZEN_EXPLAINER_MODEL",
                                 "deepseek-v4-flash"),
     "coder":     os.environ.get("ZEN_CODER_MODEL",

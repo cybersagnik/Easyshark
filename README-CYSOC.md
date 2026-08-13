@@ -213,6 +213,7 @@ cysoc > baseline check FIN-LAPTOP-22 bytes_out 5000000
 ```text
 benchmark generate <directory>
 benchmark corpus <manifest.json>
+benchmark gate <manifest.json>
 oracle
 oracle rederive <report.json>
 rescore-intel <threat-intel.json>
@@ -244,6 +245,55 @@ or unsupported manifests, duplicate case IDs, path escapes, missing files, and h
 mismatches. This verifies detector plumbing; it is not a production accuracy benchmark.
 Production validation still requires the independently labelled corpus described in
 `agentcontext/test.md`.
+
+The production gate is deliberately stricter than the regression runner. It requires
+500 unique captures, non-synthetic provenance, at least two independent reviewers,
+a 100-case/20-percent held-out split, and attack, benign, encrypted, malformed, and
+noisy traffic classes. It then enforces zero execution failures, ECE below 0.10,
+Brier score at or below 0.15, and zero aggregate detector errors:
+
+```powershell
+python -m core.production_gate corpus\manifest.json
+```
+
+### Autonomous session compaction and resume
+
+Autonomous DAG investigations write a compact checkpoint after planning, every
+hypothesis verdict, critic backtracking, synthesis, failure, and final report save.
+The checkpoint lives in the existing atomic session file and stores the mission,
+content SHA-256, version gates, completed/pending hypotheses, evidence references,
+critic decisions, provider exhaustion, retry budgets, and report path. Raw PCAP
+bytes are never copied into it.
+
+When a monitor job is reclaimed after interruption, its durable queue record locates
+the prior session. EasyShark validates the capture hash and engine/detector/policy
+versions, restores provider state, skips only durably completed hypotheses, and
+continues the pending DAG. Invalid or stale checkpoints fail closed and cause a
+fresh investigation. `session info` shows the checkpoint stage and progress.
+Provider budgets count every real transport attempt—including failed fallbacks and
+every tool-loop turn—and preserve cumulative provider latency across restarts.
+
+Deterministic anomalies and the compact narrative use a content-hash/versioned
+session cache. This survives process restarts without trusting cached data from a
+different capture or detector version. Measure cold, in-process, and restarted cache
+latency while checking output equivalence with:
+
+```powershell
+python -m core.investigation_benchmark PCAP_SAMPLES\evidence01.pcap `
+  --output .easyshark\investigation-benchmark.json
+```
+
+Run the opt-in real-provider equivalence harness after configuring provider keys.
+It performs an uninterrupted run, injects termination immediately after a durable
+verdict in a second run, resumes it, and compares verdict/evidence projections:
+
+```powershell
+python -m core.live_recovery_validation PCAP_SAMPLES\evidence01.pcap `
+  --mission "Investigate suspicious activity" `
+  --output .easyshark\live-recovery.json
+```
+
+This command makes real provider calls and is intentionally not part of offline CI.
 
 ### Threat intelligence
 
@@ -450,13 +500,36 @@ Locally verified:
 - Behavioral baseline, multi-sensor fusion, case retrieval, campaigns, and expiring
   local-response state.
 - Prompt-injection finding and untrusted evidence boundaries.
+- Autonomous kill/resume equivalence using injected process termination.
+- Persistent deterministic analysis-cache equivalence.
+- Verified state backup/restore and dry-run-first retention behavior.
+- Linux and Windows CI, dependency audit, static security scan, SBOM artifact, and
+  non-root container smoke test.
+
+Production deployments should install `requirements.lock`. Create and verify state
+backups before upgrades; restore only into an absent or empty directory:
+
+```powershell
+$env:EASYSHARK_BACKUP_HMAC_KEY="use-a-random-secret-of-at-least-32-bytes"
+python -m core.state_archive create .easyshark D:\backups\easyshark-state.zip
+python -m core.state_archive verify D:\backups\easyshark-state.zip
+python -m core.state_archive restore D:\backups\easyshark-state.zip D:\restore-test
+python -m core.state_archive prune .easyshark --days 90
+# Review the preview, then explicitly repeat with --apply.
+```
+
+Archives can contain investigation evidence, identifiers, and audit history. Every
+archive is HMAC-authenticated and restore fails closed with a missing/wrong key or
+content mismatch. Store archives on an access-controlled encrypted volume because
+the archive payload itself is not encrypted.
 
 Still required before production readiness:
 
-- At least 500 independently labelled captures.
-- Held-out ECE below 0.10.
+- Supply and run the 500+ independently labelled corpus accepted by the production
+  gate; the repository cannot manufacture independent labels.
 - Demonstrated false-positive reduction without recall regression.
-- Model-backed prompt-injection red-team runs over generated and external captures.
+- Run and retain model-backed recovery and prompt-injection evidence with real
+  provider accounts.
 - Production connector testing in vendor test tenants.
 - Sandbox escape, scale, recovery, and soak testing.
 - Connector-specific external-response safety testing.

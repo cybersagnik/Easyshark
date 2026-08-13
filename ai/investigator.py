@@ -343,8 +343,7 @@ def investigate(shell, on_event: Optional[Callable[[str, Dict[str, Any]], None]]
                       dissection=getattr(shell, "dissection", None))
 
     for h in report.hypotheses:
-        if on_event:
-            on_event("hypothesis_start", {
+        start_payload = {
                 "index":       report.hypotheses.index(h) + 1,
                 "total":       len(report.hypotheses),
                 "name":        h.name,
@@ -352,7 +351,16 @@ def investigate(shell, on_event: Optional[Callable[[str, Dict[str, Any]], None]]
                 "confidence":  h.confidence,
                 "supporting_evidence": h.supporting_evidence,
                 "verification_plan":   h.verification_plan,
-            })
+            }
+        if on_event:
+            on_event("hypothesis_start", start_payload)
+        if start_payload.get("_skip_remaining"):
+            break
+        if start_payload.get("_skip_this"):
+            h.verdict = "ruled_out"
+            h.confidence_after = "low"
+            h.reasoning = "(analyst declined to verify)"
+            continue
 
         sys_prompt = VERIFICATION_SYSTEM_PROMPT.format(
             hypothesis_name=h.name,
@@ -390,14 +398,17 @@ def investigate(shell, on_event: Optional[Callable[[str, Dict[str, Any]], None]]
             h.confidence_after = h.confidence
             h.reasoning = "(verification skipped — LLM unavailable)"
 
-        if on_event:
-            on_event("hypothesis_verdict", {
+        verdict_payload = {
                 "name":             h.name,
                 "verdict":          h.verdict,
                 "confidence_after": h.confidence_after,
                 "evidence_found":   h.evidence_found,
                 "reasoning":        h.reasoning,
-            })
+            }
+        if on_event:
+            on_event("hypothesis_verdict", verdict_payload)
+        if verdict_payload.get("_halt_loop"):
+            break
 
     # ------------------------------------------------------------------ #
     # Step 5 — Final conclusion (LLM call 3).                            #

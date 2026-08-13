@@ -24,6 +24,7 @@ Schema of a session file::
                                            "ssl_failures": <int>}},
         "exhausted": {"<role>": ["<provider>", ...]},
         "triage_cache": {...},
+        "analysis_cache": {...},
         "investigation_state": {...}
     }
 
@@ -82,6 +83,7 @@ class SessionData:
     provider_counts: Dict[str, Any] = field(default_factory=dict)
     exhausted: Dict[str, List[str]] = field(default_factory=dict)
     triage_cache: Dict[str, Any] = field(default_factory=dict)
+    analysis_cache: Dict[str, Any] = field(default_factory=dict)
     investigation_state: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -96,6 +98,7 @@ class SessionData:
             provider_counts=dict(d.get("provider_counts", {}) or {}),
             exhausted=dict(d.get("exhausted", {}) or {}),
             triage_cache=dict(d.get("triage_cache", {}) or {}),
+            analysis_cache=dict(d.get("analysis_cache", {}) or {}),
             investigation_state=dict(d.get("investigation_state", {}) or {}),
         )
 
@@ -128,6 +131,7 @@ class SessionManager:
     def create(self,
                pcap_path: str,
                triage_cache: Optional[Dict[str, Any]] = None,
+               analysis_cache: Optional[Dict[str, Any]] = None,
                investigation_state: Optional[Dict[str, Any]] = None,
                ) -> SessionData:
         now = _now_iso()
@@ -138,6 +142,7 @@ class SessionManager:
             pcap_path=str(pcap_path),
             pcap_hash=pcap_hash(pcap_path),
             triage_cache=dict(triage_cache or {}),
+            analysis_cache=dict(analysis_cache or {}),
             investigation_state=dict(investigation_state or {}),
         )
         self.save(s)

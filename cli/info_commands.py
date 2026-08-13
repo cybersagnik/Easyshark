@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def _md5(data: bytes) -> str:
     import hashlib
-    return hashlib.md5(data).hexdigest()
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()
 
 
 # Colour helpers for TUI tables

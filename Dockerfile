@@ -4,8 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     EASYSHARK_STATE_DIR=/data/.easyshark \
     EASYSHARK_PROCESS_SANDBOX=1
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY . .
 RUN useradd --create-home --uid 10001 easyshark && \
     mkdir -p /data /home/easyshark/.easyshark && \

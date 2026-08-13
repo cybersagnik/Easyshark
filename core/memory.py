@@ -87,7 +87,8 @@ def _connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
 def pcap_hash(path: str) -> str:
     """md5 of the PCAP path (not content) — fast, stable per file."""
-    return hashlib.md5(str(path).encode("utf-8")).hexdigest()
+    return hashlib.md5(str(path).encode("utf-8"),
+                       usedforsecurity=False).hexdigest()
 
 
 def _now() -> str:

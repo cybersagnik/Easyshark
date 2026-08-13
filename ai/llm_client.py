@@ -478,6 +478,7 @@ class LLMClient:
         # authoritative rate-limit mechanism; these are informational
         # only (session summary table + session-file provider_counts).
         self._role_call_counts: Dict[str, Dict[str, int]] = {}
+        self._provider_attempts: int = 0
 
         # Ollama removed — cloud-only (Zen -> OpenRouter -> Groq).
 
@@ -507,6 +508,7 @@ class LLMClient:
         # analyst sees provider / tool-loop / stream progress while a
         # long-running command is blocked on the network. Never raises.
         self._status_cb: Optional[Callable[[str, str], None]] = None
+        self._lifecycle_cb: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
     # ------------------------------------------------------------------ #
     # UI status events                                                    #
@@ -528,6 +530,19 @@ class LLMClient:
             cb(stage, detail)
         except Exception:
             pass
+
+    def set_lifecycle_callback(
+            self, cb: Optional[Callable[[str, Dict[str, Any]], None]]) -> None:
+        self._lifecycle_cb = cb
+
+    def _emit_lifecycle(self, event: str, payload: Dict[str, Any]) -> None:
+        callback = self._lifecycle_cb
+        if callback is None:
+            return
+        try:
+            callback(event, payload)
+        except Exception as exc:
+            logger.warning("LLM lifecycle callback failed: %s", exc)
 
     # ------------------------------------------------------------------ #
     # M8 — provider-degradation notes (stdout surfacing)                 #
@@ -1465,11 +1480,21 @@ class LLMClient:
                 "llm",
                 f"{model_type} · {backend} {model or ''}",
             )
+            attempt_started = time.monotonic()
+            self._provider_attempts += 1
             response = call(
                 messages=messages, model_type=model_type,
                 temperature=temperature, max_tokens=max_tokens,
                 tools=tools, tool_choice=tool_choice, model=model,
             )
+            self._emit_lifecycle("provider_attempt", {
+                "attempt": self._provider_attempts,
+                "role": model_type,
+                "provider": backend,
+                "model": model or "",
+                "success": response is not None,
+                "latency_ms": int((time.monotonic() - attempt_started) * 1000),
+            })
             if response is not None:
                 self._active_backend = backend
                 rcc = getattr(self, "_role_call_counts", None)
@@ -1480,6 +1505,10 @@ class LLMClient:
             # Record a fallback only when a lower-priority provider remains.
             if idx < len(chain) - 1:
                 self.fallback_count += 1
+                self._emit_lifecycle("provider_fallback", {
+                    "role": model_type, "provider": backend,
+                    "next_provider": chain[idx + 1][0],
+                })
                 self._emit_status(
                     "llm",
                     f"{model_type} · {backend} failed → trying next backend",

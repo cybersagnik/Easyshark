@@ -48,7 +48,7 @@ def extract_strings(packets, min_length: int = 6) -> List[Tuple[int, str]]:
 
 
 def _md5(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()
 
 
 def _peek_docx(blob: bytes) -> str:

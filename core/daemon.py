@@ -64,10 +64,10 @@ class MissionDaemon:
             self.event_alerter.drain()
 
     def _enqueue(self, path: str) -> None:
-        stat = Path(path).stat()
-        fp = f"{stat.st_size}:{stat.st_mtime_ns}"
         from .artifacts import describe
+        from .investigation_checkpoint import ENGINE_VERSION, POLICY_VERSION
         artifact = describe(path)
+        fp = f"{artifact['sha256']}:{ENGINE_VERSION}:{POLICY_VERSION}"
         job_id = self.queue.enqueue(path, fp, self.mission)
         record("mission_queued", job_id=job_id, path=path, artifact=artifact)
         self._emit("mission_queued", {"job_id": job_id, "path": path,
@@ -82,17 +82,34 @@ class MissionDaemon:
             from cli.shell import InteractiveShell
             from core.session_manager import SessionManager
             manager = SessionManager()
-            session = manager.create(job["path"])
+            session = (manager.load(job.get("session_key"))
+                       if job.get("session_key") else None)
+            if session is not None:
+                from .investigation_checkpoint import validate
+                valid, _ = validate(session.investigation_state,
+                                    job["mission"], job["path"])
+                report_path = session.investigation_state.get("report_path")
+                if valid and session.investigation_state.get("status") == "complete" \
+                        and report_path and Path(report_path).is_file():
+                    self.queue.complete(job["id"], report_path)
+                    return True
+            if session is None:
+                session = manager.create(job["path"], investigation_state={
+                    "mission_id": f"job-{job['id']}"})
+            self.queue.bind_session(job["id"], session.key)
             shell = InteractiveShell(job["path"], enable_ai=True,
                                      session=session, session_manager=manager)
             result = InvestigateCommandHandler(
-                shell, threat_intel=self.threat_intel, mode=self.mode).handle(
+                shell, threat_intel=self.threat_intel, mode=self.mode,
+                checkpoint_callback=lambda state: self.queue.checkpoint(
+                    job["id"], state)).handle(
                 ("soc-analyst" if self.mode == "soc-analyst" else "autonomous")
                 + " " + job["mission"])
             if result:
                 raise RuntimeError(result)
             manager.save(session)
-            self.queue.complete(job["id"])
+            self.queue.complete(job["id"],
+                                session.investigation_state.get("report_path"))
             record("mission_complete", job_id=job["id"], path=job["path"])
             self._emit("mission_complete", {"job_id": job["id"], "path": job["path"]})
             self._alert({"event": "mission_complete", "job_id": job["id"],

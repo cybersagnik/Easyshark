@@ -72,7 +72,7 @@ def _payload_bytes(pkt) -> bytes:
 
 
 def _md5(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()
 
 
 # ---------------------------------------------------------------------------

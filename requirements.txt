@@ -4,3 +4,7 @@ requests>=2.31.0
 # groq is optional. Active routing is Zen -> OpenRouter -> Groq; install the
 # SDK only when enabling the final fallback:
 #   pip install groq
+# Optional API compatibility layer (the V2 CLI has no web/dashboard mode).
+fastapi>=0.110.0
+uvicorn>=0.29.0
+opensandbox>=0.1.14

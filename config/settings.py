@@ -279,10 +279,13 @@ ZEN_MAX_TOKENS = int(os.environ.get("ZEN_MAX_TOKENS", "2048"))
 # Role -> Zen free model identifier. All free-tier, no API cost.
 # Override per role via env (e.g. ZEN_EXPLAINER_MODEL=deepseek-v4-flash-free).
 ZEN_MODELS = {
+    # planner uses deepseek-v4-flash (was gpt-5-nano) — the hypothesis-plan
+    # DAG needs complete parseable JSON; gpt-5-nano truncated it and forced
+    # the linear fallback. deepseek-v4-flash returns complete plans.
     "planner":   os.environ.get("ZEN_PLANNER_MODEL",
-                                "ling-3.0-flash-free"),
+                                "deepseek-v4-flash"),
     "explainer": os.environ.get("ZEN_EXPLAINER_MODEL",
-                                "deepseek-v4-flash-free"),
+                                "deepseek-v4-flash"),
     "coder":     os.environ.get("ZEN_CODER_MODEL",
                                 "north-mini-code-free"),
     "critic":    os.environ.get("ZEN_CRITIC_MODEL",
